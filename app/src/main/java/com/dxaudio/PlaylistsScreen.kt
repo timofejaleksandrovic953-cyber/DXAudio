@@ -13,21 +13,24 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
 fun PlaylistsScreen(
     onPlayPlaylist: (Uri, String) -> Unit
 ) {
+    val context = LocalContext.current
     var playlists by remember { mutableStateOf<List<File>>(emptyList()) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
 
-    val playlistsDir = remember { File(Environment.getExternalStorageDirectory(), "Music/DXAudio_Playlists").apply { mkdirs() } }
+    // Безопасная папка внутри приложения
+    val playlistsDir = remember { 
+        File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "playlists").apply { mkdirs() } 
+    }
 
     fun refreshPlaylists() {
         playlists = playlistsDir.listFiles { file -> file.name.endsWith(".m3u", true) }?.toList() ?: emptyList()
