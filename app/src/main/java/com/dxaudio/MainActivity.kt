@@ -3,7 +3,6 @@ package com.dxaudio
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color as AndroidColor
 import android.media.audiofx.Visualizer
 import android.net.Uri
 import android.os.Bundle
@@ -27,9 +26,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
@@ -51,6 +51,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.abs
+import kotlin.math.sqrt
 
 data class LyricLine(val timeMs: Long, val text: String)
 
@@ -80,7 +81,7 @@ class MainActivity : ComponentActivity() {
             var currentTheme by remember { mutableStateOf(repo.getSavedTheme()) }
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Files) }
             
-            // Настройки
+            // Глобальные настройки
             var autoShowLyrics by remember { mutableStateOf(prefs.getBoolean("auto_lyrics", false)) }
             var visualizerStyle by remember { mutableStateOf(prefs.getString("viz_style", "Волна") ?: "Волна") }
             
@@ -156,7 +157,7 @@ class MainActivity : ComponentActivity() {
                                     if (currentTrackTitle != "Ничего не играет") {
                                         MiniPlayer(currentTheme, currentTrackTitle, isPlaying, { if (isPlaying) exoPlayer.pause() else exoPlayer.play() }, { currentScreen = Screen.Player })
                                     }
-                                    // ИСПРАВЛЕНИЕ ФИОЛЕТОВОЙ ПАНЕЛИ
+                                    
                                     NavigationBar(
                                         containerColor = currentTheme.surface,
                                         contentColor = currentTheme.onSurface
@@ -251,8 +252,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ... (loadLyrics, handleIntent, parseM3u и onDestroy остаются без изменений) ...
-    
     private fun loadLyrics(audioUri: Uri): List<LyricLine> {
         return try {
             val path = audioUri.path ?: return emptyList()
@@ -309,26 +308,6 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() { super.onDestroy(); player?.release(); player = null }
 }
 
-// --- КОМПОНЕНТ ВИЗУАЛИЗАТОРА ---
-@Composable
-fun AudioVisualizerView(visualizerStyle: String, theme: DxTheme, modifier: Modifier = Modifier) {
-    if (visualizerStyle == "Отключен") return
-
-    var fftData by remember { mutableStateOf(FloatArray(0)) }
-    var visualizerRef by remember { mutableStateOf<Visualizer?>(null) }
-    val context = LocalContext.current
-    val player = (context as? MainActivity)?.let { null } // Заглушка, плеер передадим через CompositionLocal или напрямую
-
-    // Инициализация системного Visualizer
-    DisposableEffect(Unit) {
-        onDispose { visualizerRef?.release() }
-    }
-
-    // Нам нужен доступ к ExoPlayer. В реальном проекте лучше передать его в аргументах.
-    // Здесь для простоты мы берем глобальный player из Activity (предполагается, что он там есть)
-    // *Внимание*: Для чистоты кода лучше прокинуть ExoPlayer в аргументы AudioVisualizerView!
-}
-
 @Composable
 fun MiniPlayer(theme: DxTheme, title: String, isPlaying: Boolean, onPlayPause: () -> Unit, onClick: () -> Unit) {
     Surface(
@@ -358,14 +337,18 @@ fun PlayerScreen(
     onBack: () -> Unit
 ) {
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
-    var currentPosition by remember { mutableStateOf(player.currentPosition) }
     var duration by remember { mutableStateOf(player.duration) }
     var showLyrics by remember { mutableStateOf(autoShowLyrics && lyrics.isNotEmpty()) }
     val listState = rememberLazyListState()
 
-    // Состояние для данных визуализатора
-    var fftData by remember { mutableStateOf(FloatArray(64) { 0f }) }
+    // Состояния для слайдера (чтобы он не дёргался)
+    var sliderPosition by remember { mutableStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+
+    // Визуализатор
+    var visualizerData by remember { mutableStateOf(FloatArray(64) { 0f }) }
     var visualizer by remember { mutableStateOf<Visualizer?>(null) }
+    val audioSessionId = player.audioSessionId
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -376,57 +359,73 @@ fun PlayerScreen(
         onDispose { player.removeListener(listener) }
     }
 
-    // Инициализация визуализатора
-    DisposableEffect(player, visualizerStyle) {
-        if (visualizerStyle != "Отключен" && player.audioSessionId != 0) {
+    // Плавное обновление слайдера
+    LaunchedEffect(player) {
+        while (true) {
+            if (!isDragging) {
+                sliderPosition = player.currentPosition.toFloat()
+            }
+            if (player.duration > 0) duration = player.duration
+            delay(100) // 10 раз в секунду
+        }
+    }
+
+    // Автопрокрутка текста
+    LaunchedEffect(sliderPosition, showLyrics) {
+        if (showLyrics && lyrics.isNotEmpty()) {
+            val currentLineIndex = lyrics.indexOfLast { it.timeMs <= sliderPosition.toLong() }
+            if (currentLineIndex >= 0) listState.animateScrollToItem(currentLineIndex)
+        }
+    }
+
+    // Инициализация Визуализатора
+    DisposableEffect(audioSessionId, visualizerStyle) {
+        if (visualizerStyle != "Отключен" && audioSessionId != 0) {
             try {
-                val vis = Visualizer(player.audioSessionId)
+                val vis = Visualizer(audioSessionId)
                 vis.captureSize = Visualizer.getCaptureSizeRange()[1]
+                var lastUpdateTime = 0L
+
                 vis.setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
                     override fun onWaveFormDataCapture(v: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
                         if (visualizerStyle == "Волна" && waveform != null) {
-                            // Берем каждый 8-й байт для оптимизации
-                            val floats = FloatArray(waveform.size / 8) { i ->
-                                abs(waveform[i * 8].toInt()) / 128f
+                            val now = System.currentTimeMillis()
+                            if (now - lastUpdateTime > 33) { // ~30 FPS
+                                lastUpdateTime = now
+                                val floats = FloatArray(waveform.size / 8) { i ->
+                                    abs(waveform[i * 8].toInt()) / 128f
+                                }
+                                visualizerData = floats
                             }
-                            fftData = floats
                         }
                     }
                     override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, samplingRate: Int) {
                         if (visualizerStyle == "Спектр (Cava)" && fft != null) {
-                            // FFT возвращает реальные и мнимые числа попарно
-                            val floats = FloatArray(32) { i ->
-                                val real = fft[i * 2].toFloat()
-                                val imag = fft[i * 2 + 1].toFloat()
-                                val magnitude = kotlin.math.sqrt(real * real + imag * imag) / 128f
-                                magnitude.coerceIn(0f, 1f)
+                            val now = System.currentTimeMillis()
+                            if (now - lastUpdateTime > 33) {
+                                lastUpdateTime = now
+                                val floats = FloatArray(32) { i ->
+                                    val real = fft[i * 2].toFloat()
+                                    val imag = fft[i * 2 + 1].toFloat()
+                                    val magnitude = sqrt(real * real + imag * imag) / 128f
+                                    magnitude.coerceIn(0f, 1f)
+                                }
+                                visualizerData = floats
                             }
-                            fftData = floats
                         }
                     }
                 }, Visualizer.getMaxCaptureRate() / 2, true, true)
+                
                 vis.enabled = true
                 visualizer = vis
-            } catch (e: Exception) { e.printStackTrace() }
+            } catch (e: Exception) { 
+                e.printStackTrace() 
+            }
         }
         onDispose {
             visualizer?.enabled = false
             visualizer?.release()
-        }
-    }
-
-    LaunchedEffect(player) {
-        while (true) {
-            currentPosition = player.currentPosition
-            if (player.duration > 0) duration = player.duration
-            delay(500)
-        }
-    }
-
-    LaunchedEffect(currentPosition, showLyrics) {
-        if (showLyrics && lyrics.isNotEmpty()) {
-            val currentLineIndex = lyrics.lastIndexOfFirst { it.timeMs <= currentPosition }
-            if (currentLineIndex >= 0) listState.animateScrollToItem(currentLineIndex)
+            visualizer = null
         }
     }
 
@@ -450,7 +449,7 @@ fun PlayerScreen(
         if (showLyrics && lyrics.isNotEmpty()) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 100.dp)) {
                 items(lyrics) { line ->
-                    val isCurrent = line.timeMs <= currentPosition && line.timeMs + 5000 > currentPosition
+                    val isCurrent = line.timeMs <= sliderPosition.toLong() && line.timeMs + 5000 > sliderPosition.toLong()
                     Text(
                         text = line.text,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -477,19 +476,18 @@ fun PlayerScreen(
             Spacer(modifier = Modifier.weight(1f))
         }
 
-        // --- БЛОК ВИЗУАЛИЗАТОРА ---
         if (visualizerStyle != "Отключен") {
             Canvas(modifier = Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 16.dp)) {
-                if (fftData.isNotEmpty()) {
+                if (visualizerData.isNotEmpty()) {
                     val width = size.width
                     val height = size.height
                     val centerY = height / 2
 
                     if (visualizerStyle == "Волна") {
                         val path = Path()
-                        val step = width / (fftData.size - 1).coerceAtLeast(1)
+                        val step = width / (visualizerData.size - 1).coerceAtLeast(1)
                         path.moveTo(0f, centerY)
-                        fftData.forEachIndexed { index, value ->
+                        visualizerData.forEachIndexed { index, value ->
                             val x = index * step
                             val y = centerY - (value * height / 2)
                             if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
@@ -498,25 +496,18 @@ fun PlayerScreen(
                         path.lineTo(0f, centerY)
                         path.close()
 
-                        drawPath(
-                            path = path,
-                            color = theme.primary.copy(alpha = 0.8f)
-                        )
-                        drawPath(
-                            path = path,
-                            color = theme.primary,
-                            style = Stroke(width = 2.dp.toPx())
-                        )
+                        drawPath(path = path, color = theme.primary.copy(alpha = 0.8f))
+                        drawPath(path = path, color = theme.primary, style = Stroke(width = 2.dp.toPx()))
                     } else if (visualizerStyle == "Спектр (Cava)") {
-                        val barWidth = width / (fftData.size * 2)
-                        fftData.forEachIndexed { index, value ->
+                        val barWidth = width / (visualizerData.size * 2)
+                        visualizerData.forEachIndexed { index, value ->
                             val barHeight = value * height
                             val x = index * barWidth * 2
                             drawRoundRect(
                                 color = theme.primary,
                                 topLeft = Offset(x, centerY - barHeight / 2),
-                                size = androidx.compose.ui.geometry.Size(barWidth, barHeight),
-                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f, 4f)
+                                size = Size(barWidth, barHeight),
+                                cornerRadius = CornerRadius(4f, 4f)
                             )
                         }
                     }
@@ -524,10 +515,16 @@ fun PlayerScreen(
             }
         }
 
-        // Слайдер перемотки
         Slider(
-            value = currentPosition.toFloat().coerceIn(0f, if (duration > 0) duration.toFloat() else 1f),
-            onValueChange = { player.seekTo(it.toLong()) },
+            value = sliderPosition.coerceIn(0f, if (duration > 0) duration.toFloat() else 1f),
+            onValueChange = { 
+                isDragging = true 
+                sliderPosition = it 
+            },
+            onValueChangeFinished = {
+                isDragging = false 
+                player.seekTo(sliderPosition.toLong())
+            },
             valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f),
             colors = SliderDefaults.colors(
                 thumbColor = theme.primary,
@@ -537,7 +534,7 @@ fun PlayerScreen(
         )
         
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatTime(currentPosition), style = MaterialTheme.typography.bodySmall, color = theme.onSurface)
+            Text(formatTime(sliderPosition.toLong()), style = MaterialTheme.typography.bodySmall, color = theme.onSurface)
             Text(formatTime(duration), style = MaterialTheme.typography.bodySmall, color = theme.onSurface)
         }
 
@@ -570,14 +567,6 @@ fun PlayerScreen(
         }
         Spacer(modifier = Modifier.height(32.dp))
     }
-}
-
-// Вспомогательная функция (lastIndexOfFirst не существует в Kotlin, исправляем на indexOfLast)
-fun <T> List<T>.lastIndexOfFirst(predicate: (T) -> Boolean): Int {
-    for (i in indices.reversed()) {
-        if (predicate(this[i])) return i
-    }
-    return -1
 }
 
 fun formatTime(ms: Long): String {
