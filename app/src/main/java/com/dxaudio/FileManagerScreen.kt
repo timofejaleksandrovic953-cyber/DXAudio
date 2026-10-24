@@ -1,7 +1,9 @@
 package com.dxaudio
 
+import android.content.Intent
 import android.net.Uri
-import android.os.Environment
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,97 +17,101 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
 
 @Composable
 fun FileManagerScreen(
     onPlayAudio: (Uri, String) -> Unit,
     onPlayPlaylist: (Uri, String) -> Unit
 ) {
-    var currentDir by remember { mutableStateOf(Environment.getExternalStorageDirectory()) }
-    var files by remember { mutableStateOf<List<File>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) } // Индикатор загрузки
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("dx_prefs", android.content.Context.MODE_PRIVATE) }
+    
+    var currentDirUri by remember { mutableStateOf(prefs.getString("saf_tree_uri", null)?.let { Uri.parse(it) }) }
+    var files by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(false) }
 
-    LaunchedEffect(currentDir) {
-        isLoading = true
-        withContext(Dispatchers.IO) {
-            val list = currentDir.listFiles()?.toList() ?: emptyList()
-            val filtered = list.filter { file ->
-                file.isDirectory || 
-                file.name.endsWith(".mp3", true) || 
-                file.name.endsWith(".flac", true) || 
-                file.name.endsWith(".wav", true) || 
-                file.name.endsWith(".ogg", true) || 
-                file.name.endsWith(".m4a", true) ||
-                file.name.endsWith(".m3u", true) ||
-                file.name.endsWith(".m3u8", true) ||
-                file.name.endsWith(".lrc", true)
-            }
-            files = filtered.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+    val folderPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let {
+            context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            prefs.edit().putString("saf_tree_uri", it.toString()).apply()
+            currentDirUri = it
         }
-        isLoading = false
+    }
+
+    LaunchedEffect(currentDirUri) {
+        if (currentDirUri != null) {
+            isLoading = true
+            withContext(Dispatchers.IO) {
+                val root = DocumentFile.fromTreeUri(context, currentDirUri!!)
+                val list = root?.listFiles()?.toList() ?: emptyList()
+                val filtered = list.filter { file ->
+                    file.isDirectory || 
+                    file.name?.endsWith(".mp3", true) == true || 
+                    file.name?.endsWith(".flac", true) == true || 
+                    file.name?.endsWith(".wav", true) == true || 
+                    file.name?.endsWith(".ogg", true) == true || 
+                    file.name?.endsWith(".m4a", true) == true ||
+                    file.name?.endsWith(".m3u", true) == true ||
+                    file.name?.endsWith(".lrc", true) == true
+                }
+                files = filtered.sortedWith(compareBy({ !it.isDirectory }, { it.name?.lowercase() }))
+            }
+            isLoading = false
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Text(
-            text = currentDir.absolutePath,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(16.dp),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-
-        if (isLoading) {
+        if (currentDirUri == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+                Button(onClick = { folderPickerLauncher.launch(null) }) {
+                    Text("Выбрать папку с музыкой")
+                }
             }
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                if (currentDir.parentFile != null) {
-                    item {
+            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Выбрана папка", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { folderPickerLauncher.launch(null) }) { Text("Сменить") }
+            }
+
+            if (isLoading) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(files, key = { it.uri.toString() }) { file ->
                         Row(
-                            modifier = Modifier.fillMaxWidth().clickable { currentDir = currentDir.parentFile!! }.padding(16.dp),
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                if (file.isDirectory) {
+                                    // Для простоты заходим в корень выбранной папки (полноценная навигация по SAF сложнее)
+                                    currentDirUri = file.uri 
+                                } else {
+                                    val name = file.name ?: "Unknown"
+                                    if (name.endsWith(".m3u", true)) {
+                                        onPlayPlaylist(file.uri, name)
+                                    } else if (!name.endsWith(".lrc", true)) {
+                                        onPlayAudio(file.uri, name)
+                                    }
+                                }
+                            }.padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            val icon = when {
+                                file.isDirectory -> Icons.Default.Folder
+                                file.name?.endsWith(".m3u", true) == true -> Icons.Default.PlaylistPlay
+                                file.name?.endsWith(".lrc", true) == true -> Icons.Default.Subject
+                                else -> Icons.Default.MusicNote
+                            }
+                            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                             Spacer(modifier = Modifier.width(12.dp))
-                            Text(".. (Наверх)", style = MaterialTheme.typography.bodyLarge)
+                            Text(text = file.name ?: "Без имени", style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         HorizontalDivider()
                     }
-                }
-
-                items(files, key = { it.absolutePath }) { file ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            if (file.isDirectory) {
-                                currentDir = file
-                            } else {
-                                val name = file.name.lowercase()
-                                if (name.endsWith(".m3u") || name.endsWith(".m3u8")) {
-                                    onPlayPlaylist(Uri.fromFile(file), file.name)
-                                } else if (!name.endsWith(".lrc")) {
-                                    onPlayAudio(Uri.fromFile(file), file.name)
-                                }
-                            }
-                        }.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val icon = when {
-                            file.isDirectory -> Icons.Default.Folder
-                            file.name.endsWith(".m3u", true) || file.name.endsWith(".m3u8", true) -> Icons.Default.PlaylistPlay
-                            file.name.endsWith(".lrc", true) -> Icons.Default.Subject
-                            else -> Icons.Default.MusicNote
-                        }
-                        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(text = file.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    HorizontalDivider()
                 }
             }
         }
