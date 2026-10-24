@@ -101,7 +101,7 @@ fun FileManagerScreen(
                             file.name.endsWith(".lrc", true) -> Icons.Default.Subject
                             else -> Icons.Default.MusicNote
                         }
-                        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(text = file.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
