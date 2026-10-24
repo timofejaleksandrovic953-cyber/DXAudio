@@ -1,25 +1,26 @@
 package com.dxaudio
 
-import android.Manifest
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -30,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.dxaudio.theme.DxTheme
 import com.dxaudio.theme.DxThemeProvider
 import com.dxaudio.theme.ThemeRepository
 import com.dxaudio.ui.ThemePickerScreen
@@ -38,7 +40,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
-// Модели данных
 data class LyricLine(val timeMs: Long, val text: String)
 
 sealed class Screen {
@@ -63,11 +64,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             val repo = remember { ThemeRepository(context) }
-            var currentTheme by remember { mutableStateOf(repo.getDefaultTheme()) }
+            
+            // Загружаем сохраненную тему
+            var currentTheme by remember { mutableStateOf(repo.getSavedTheme()) }
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Files) }
             
             var currentTrackTitle by remember { mutableStateOf("Ничего не играет") }
-            var currentAudioUri by remember { mutableStateOf<Uri?>(null) }
             var currentLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
             var isPlaying by remember { mutableStateOf(false) }
 
@@ -80,26 +82,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Загрузка аудио и поиск субтитров (.lrc)
             LaunchedEffect(externalAudioUri) {
                 externalAudioUri?.let { uri ->
                     exoPlayer.setMediaItem(MediaItem.fromUri(uri))
                     exoPlayer.prepare()
                     exoPlayer.play()
                     currentTrackTitle = "Внешний файл"
-                    currentAudioUri = uri
-                    
-                    // Ищем .lrc файл рядом с аудио
-                    withContext(Dispatchers.IO) {
-                        currentLyrics = loadLyrics(uri)
-                    }
-                    
+                    withContext(Dispatchers.IO) { currentLyrics = loadLyrics(uri) }
                     currentScreen = Screen.Player
                     externalAudioUri = null
                 }
             }
 
-            // Обработка плейлистов
             LaunchedEffect(externalPlaylistUri) {
                 externalPlaylistUri?.let { uri ->
                     withContext(Dispatchers.IO) {
@@ -110,7 +104,6 @@ class MainActivity : ComponentActivity() {
                                 exoPlayer.prepare()
                                 exoPlayer.play()
                                 currentTrackTitle = "Плейлист"
-                                currentAudioUri = null
                                 currentLyrics = emptyList()
                                 currentScreen = Screen.Player
                             }
@@ -123,7 +116,10 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(externalThemeUri) {
                 externalThemeUri?.let { uri ->
                     val theme = repo.importTheme(uri)
-                    if (theme != null) currentTheme = theme
+                    if (theme != null) {
+                        currentTheme = theme
+                        repo.saveThemeId(theme.id) // Сохраняем
+                    }
                     externalThemeUri = null
                 }
             }
@@ -135,32 +131,12 @@ class MainActivity : ComponentActivity() {
                             if (currentScreen != Screen.Player) {
                                 Column {
                                     if (currentTrackTitle != "Ничего не играет") {
-                                        MiniPlayer(
-                                            title = currentTrackTitle,
-                                            isPlaying = isPlaying,
-                                            onPlayPause = { if (isPlaying) exoPlayer.pause() else exoPlayer.play() },
-                                            onClick = { currentScreen = Screen.Player }
-                                        )
+                                        MiniPlayer(currentTheme, currentTrackTitle, isPlaying, { if (isPlaying) exoPlayer.pause() else exoPlayer.play() }, { currentScreen = Screen.Player })
                                     }
                                     NavigationBar {
-                                        NavigationBarItem(
-                                            selected = currentScreen == Screen.Files,
-                                            onClick = { currentScreen = Screen.Files },
-                                            icon = { Icon(Icons.Default.Folder, contentDescription = null) },
-                                            label = { Text("Файлы") }
-                                        )
-                                        NavigationBarItem(
-                                            selected = currentScreen == Screen.Playlists,
-                                            onClick = { currentScreen = Screen.Playlists },
-                                            icon = { Icon(Icons.Default.PlaylistPlay, contentDescription = null) },
-                                            label = { Text("Плейлисты") }
-                                        )
-                                        NavigationBarItem(
-                                            selected = currentScreen == Screen.Settings || currentScreen == Screen.Themes,
-                                            onClick = { currentScreen = Screen.Settings },
-                                            icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                                            label = { Text("Настройки") }
-                                        )
+                                        NavigationBarItem(selected = currentScreen == Screen.Files, onClick = { currentScreen = Screen.Files }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Файлы") })
+                                        NavigationBarItem(selected = currentScreen == Screen.Playlists, onClick = { currentScreen = Screen.Playlists }, icon = { Icon(Icons.Default.PlaylistPlay, null) }, label = { Text("Плейлисты") })
+                                        NavigationBarItem(selected = currentScreen == Screen.Settings || currentScreen == Screen.Themes, onClick = { currentScreen = Screen.Settings }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Настройки") })
                                     }
                                 }
                             }
@@ -172,16 +148,19 @@ class MainActivity : ComponentActivity() {
                                     onPlayAudio = { uri, _ -> externalAudioUri = uri },
                                     onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri }
                                 )
-                                Screen.Playlists -> PlaylistsScreen(
-                                    onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri }
-                                )
+                                Screen.Playlists -> PlaylistsScreen(onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri })
                                 Screen.Settings -> SettingsScreen(onOpenThemes = { currentScreen = Screen.Themes })
                                 Screen.Themes -> ThemePickerScreen(
                                     current = currentTheme,
                                     allThemes = repo.getAllThemes(),
-                                    onSelect = { theme -> currentTheme = theme; currentScreen = Screen.Settings }
+                                    onSelect = { theme -> 
+                                        currentTheme = theme
+                                        repo.saveThemeId(theme.id) // Сохраняем при выборе
+                                        currentScreen = Screen.Settings 
+                                    }
                                 )
                                 Screen.Player -> PlayerScreen(
+                                    theme = currentTheme,
                                     player = exoPlayer,
                                     title = currentTrackTitle,
                                     lyrics = currentLyrics,
@@ -195,7 +174,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Парсер LRC файлов
     private fun loadLyrics(audioUri: Uri): List<LyricLine> {
         return try {
             val path = audioUri.path ?: return emptyList()
@@ -204,7 +182,6 @@ class MainActivity : ComponentActivity() {
 
             val lyrics = mutableListOf<LyricLine>()
             val regex = Regex("\\[(\\d{2}):(\\d{2}\\.\\d{2})](.*)")
-            
             lrcFile.forEachLine { line ->
                 val match = regex.find(line)
                 if (match != null) {
@@ -218,29 +195,19 @@ class MainActivity : ComponentActivity() {
                 }
             }
             lyrics.sortedBy { it.timeMs }
-        } catch (e: Exception) {
-            emptyList()
-        }
+        } catch (e: Exception) { emptyList() }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handleIntent(intent)
-    }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handleIntent(intent) }
 
     private fun handleIntent(intent: Intent?) {
         if (intent?.action == Intent.ACTION_VIEW) {
             val uri = intent.data ?: return
             val mime = intent.type ?: ""
             val path = uri.path?.lowercase() ?: ""
-
-            if (path.endsWith(".dxth") || mime == "application/zip" || mime == "application/octet-stream") {
-                externalThemeUri = uri
-            } else if (path.endsWith(".m3u") || path.endsWith(".m3u8") || mime.contains("mpegurl")) {
-                externalPlaylistUri = uri
-            } else {
-                externalAudioUri = uri
-            }
+            if (path.endsWith(".dxth") || mime == "application/zip" || mime == "application/octet-stream") externalThemeUri = uri
+            else if (path.endsWith(".m3u") || path.endsWith(".m3u8") || mime.contains("mpegurl")) externalPlaylistUri = uri
+            else externalAudioUri = uri
         }
     }
 
@@ -261,20 +228,22 @@ class MainActivity : ComponentActivity() {
         return items
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        player?.release()
-        player = null
-    }
+    override fun onDestroy() { super.onDestroy(); player?.release(); player = null }
 }
 
 @Composable
-fun MiniPlayer(title: String, isPlaying: Boolean, onPlayPause: () -> Unit, onClick: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
+fun MiniPlayer(theme: DxTheme, title: String, isPlaying: Boolean, onPlayPause: () -> Unit, onClick: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth().padding(8.dp).shadow(4.dp, RoundedCornerShape(12.dp)).clickable { onClick() },
+        shape = RoundedCornerShape(12.dp)
+    ) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.MusicNote, contentDescription = null, tint = theme.primary)
+            Spacer(Modifier.width(12.dp))
             Text(text = title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             IconButton(onClick = onPlayPause) {
-                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null)
+                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null, tint = theme.primary)
             }
         }
     }
@@ -282,6 +251,7 @@ fun MiniPlayer(title: String, isPlaying: Boolean, onPlayPause: () -> Unit, onCli
 
 @Composable
 fun PlayerScreen(
+    theme: DxTheme,
     player: ExoPlayer,
     title: String,
     lyrics: List<LyricLine>,
@@ -290,7 +260,6 @@ fun PlayerScreen(
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
     var currentPosition by remember { mutableStateOf(player.currentPosition) }
     var duration by remember { mutableStateOf(player.duration) }
-    
     var showLyrics by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
@@ -311,17 +280,21 @@ fun PlayerScreen(
         }
     }
 
-    // Автопрокрутка текста
     LaunchedEffect(currentPosition, showLyrics) {
         if (showLyrics && lyrics.isNotEmpty()) {
             val currentLineIndex = lyrics.indexOfLast { it.timeMs <= currentPosition }
-            if (currentLineIndex >= 0) {
-                listState.animateScrollToItem(currentLineIndex)
-            }
+            if (currentLineIndex >= 0) listState.animateScrollToItem(currentLineIndex)
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    // Красивый градиентный фон
+    val gradient = Brush.verticalGradient(
+        colors = listOf(theme.primary.copy(alpha = 0.15f), theme.background),
+        startY = 0f,
+        endY = 1200f
+    )
+
+    Column(modifier = Modifier.fillMaxSize().background(gradient).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Назад") }
             Text(if (showLyrics) "Текст песни" else "Сейчас играет", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
@@ -333,71 +306,80 @@ fun PlayerScreen(
         }
 
         if (showLyrics && lyrics.isNotEmpty()) {
-            // Экран текста песни
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(vertical = 100.dp)
-            ) {
+            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 100.dp)) {
                 items(lyrics) { line ->
                     val isCurrent = line.timeMs <= currentPosition && line.timeMs + 5000 > currentPosition
                     Text(
                         text = line.text,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                         textAlign = TextAlign.Center,
-                        color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        color = if (isCurrent) theme.primary else theme.onSurface,
                         fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
                         fontSize = if (isCurrent) 20.sp else 16.sp
                     )
                 }
             }
         } else {
-            // Стандартный экран плеера
             Spacer(modifier = Modifier.weight(1f))
-            Surface(modifier = Modifier.size(240.dp), shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.primaryContainer) {
+            // Красивая "обложка" с тенью
+            Surface(
+                modifier = Modifier.size(260.dp).shadow(12.dp, MaterialTheme.shapes.extraLarge),
+                shape = MaterialTheme.shapes.extraLarge, 
+                color = theme.surface
+            ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(100.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                    Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(120.dp), tint = theme.primary)
                 }
             }
             Spacer(modifier = Modifier.height(32.dp))
-            Text(text = title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(text = title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(modifier = Modifier.weight(1f))
         }
 
+        // Стилизованный слайдер
         Slider(
             value = currentPosition.toFloat().coerceIn(0f, if (duration > 0) duration.toFloat() else 1f),
             onValueChange = { player.seekTo(it.toLong()) },
-            valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f)
+            valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f),
+            colors = SliderDefaults.colors(
+                thumbColor = theme.primary,
+                activeTrackColor = theme.primary,
+                inactiveTrackColor = theme.surface
+            )
         )
         
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatTime(currentPosition), style = MaterialTheme.typography.bodySmall)
-            Text(formatTime(duration), style = MaterialTheme.typography.bodySmall)
+            Text(formatTime(currentPosition), style = MaterialTheme.typography.bodySmall, color = theme.onSurface)
+            Text(formatTime(duration), style = MaterialTheme.typography.bodySmall, color = theme.onSurface)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Кнопки управления
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { player.seekToPrevious() }, modifier = Modifier.size(64.dp)) {
-                Icon(Icons.Default.SkipPrevious, contentDescription = "Предыдущий", modifier = Modifier.size(36.dp))
+                Icon(Icons.Default.SkipPrevious, contentDescription = "Предыдущий", modifier = Modifier.size(40.dp), tint = theme.onSurface)
             }
             Spacer(modifier = Modifier.width(24.dp))
-            Button(
-                onClick = { 
+            // Главная кнопка Play
+            Surface(
+                modifier = Modifier.size(84.dp).clickable { 
                     if (isPlaying) player.pause() 
                     else {
                         if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
                         player.play() 
                     }
-                },
-                modifier = Modifier.size(80.dp),
-                shape = CircleShape
+                }.shadow(8.dp, CircleShape),
+                shape = CircleShape,
+                color = theme.primary
             ) {
-                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play/Pause", modifier = Modifier.size(48.dp))
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play/Pause", modifier = Modifier.size(48.dp), tint = theme.onPrimary)
+                }
             }
             Spacer(modifier = Modifier.width(24.dp))
             IconButton(onClick = { player.seekToNext() }, modifier = Modifier.size(64.dp)) {
-                Icon(Icons.Default.SkipNext, contentDescription = "Следующий", modifier = Modifier.size(36.dp))
+                Icon(Icons.Default.SkipNext, contentDescription = "Следующий", modifier = Modifier.size(40.dp), tint = theme.onSurface)
             }
         }
         Spacer(modifier = Modifier.height(32.dp))
