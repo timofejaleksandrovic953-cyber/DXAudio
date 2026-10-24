@@ -2,7 +2,6 @@ package com.dxaudio
 
 import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -12,13 +11,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,11 +29,26 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.dxaudio.theme.DxThemeProvider
 import com.dxaudio.theme.ThemeRepository
 import com.dxaudio.ui.ThemePickerScreen
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import java.io.File
+
+sealed class Screen {
+    object Files : Screen()
+    object Playlists : Screen()
+    object Settings : Screen()
+    object Themes : Screen()
+    object Player : Screen()
+}
 
 class MainActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
-    private var externalUri by mutableStateOf<Uri?>(null)
+    
+    // Состояния для обработки внешних интентов
+    private var externalAudioUri by mutableStateOf<Uri?>(null)
+    private var externalThemeUri by mutableStateOf<Uri?>(null)
+    private var externalPlaylistUri by mutableStateOf<Uri?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,60 +57,133 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             val repo = remember { ThemeRepository(context) }
-            var currentTheme by remember { mutableStateOf(repo.defaultTheme()) }
+            var currentTheme by remember { mutableStateOf(repo.getDefaultTheme()) }
+            var currentScreen by remember { mutableStateOf<Screen>(Screen.Files) }
             
-            var currentScreen by remember { mutableStateOf("library") }
-            var showThemes by remember { mutableStateOf(false) }
-            
-            var currentTrackTitle by remember { mutableStateOf("") }
+            var currentTrackTitle by remember { mutableStateOf("Ничего не играет") }
+            var isPlaying by remember { mutableStateOf(false) }
 
             val exoPlayer = remember {
-                ExoPlayer.Builder(context).build().also { player = it }
+                ExoPlayer.Builder(context).build().also { 
+                    player = it
+                    it.addListener(object : Player.Listener {
+                        override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
+                    })
+                }
             }
 
-            // Обработка открытия файла через "Открыть с помощью..."
-            LaunchedEffect(externalUri) {
-                externalUri?.let { uri ->
-                    val mediaItem = MediaItem.fromUri(uri)
-                    exoPlayer.setMediaItem(mediaItem)
+            // Обработка внешних файлов (Аудио)
+            LaunchedEffect(externalAudioUri) {
+                externalAudioUri?.let { uri ->
+                    exoPlayer.setMediaItem(MediaItem.fromUri(uri))
                     exoPlayer.prepare()
                     exoPlayer.play()
                     currentTrackTitle = "Внешний файл"
-                    currentScreen = "player"
+                    currentScreen = Screen.Player // Принудительный переход на экран плеера
+                    externalAudioUri = null
+                }
+            }
+
+            // Обработка внешних плейлистов (M3U)
+            LaunchedEffect(externalPlaylistUri) {
+                externalPlaylistUri?.let { uri ->
+                    withContext(Dispatchers.IO) {
+                        val mediaItems = parseM3u(context, uri)
+                        if (mediaItems.isNotEmpty()) {
+                            withContext(Dispatchers.Main) {
+                                exoPlayer.setMediaItems(mediaItems)
+                                exoPlayer.prepare()
+                                exoPlayer.play()
+                                currentTrackTitle = "Плейлист"
+                                currentScreen = Screen.Player
+                            }
+                        }
+                    }
+                    externalPlaylistUri = null
+                }
+            }
+
+            // Обработка внешних тем (.dxth)
+            LaunchedEffect(externalThemeUri) {
+                externalThemeUri?.let { uri ->
+                    val theme = repo.importTheme(uri)
+                    if (theme != null) {
+                        currentTheme = theme
+                        // Не перекидываем на плеер, оставляем в настройках
+                    }
+                    externalThemeUri = null
                 }
             }
 
             DxThemeProvider(currentTheme) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    when {
-                        showThemes -> {
-                            ThemePickerScreen(
-                                current = currentTheme,
-                                onSelect = { theme ->
-                                    currentTheme = theme
-                                    showThemes = false
+                    Scaffold(
+                        bottomBar = {
+                            if (currentScreen != Screen.Player) {
+                                Column {
+                                    // Мини-плеер
+                                    if (currentTrackTitle != "Ничего не играет") {
+                                        MiniPlayer(
+                                            title = currentTrackTitle,
+                                            isPlaying = isPlaying,
+                                            onPlayPause = { if (isPlaying) exoPlayer.pause() else exoPlayer.play() },
+                                            onClick = { currentScreen = Screen.Player }
+                                        )
+                                    }
+                                    // Нижняя навигация
+                                    NavigationBar {
+                                        NavigationBarItem(
+                                            selected = currentScreen == Screen.Files,
+                                            onClick = { currentScreen = Screen.Files },
+                                            icon = { Icon(Icons.Default.List, contentDescription = null) },
+                                            label = { Text("Файлы") }
+                                        )
+                                        NavigationBarItem(
+                                            selected = currentScreen == Screen.Playlists,
+                                            onClick = { currentScreen = Screen.Playlists },
+                                            icon = { Icon(Icons.Default.PlaylistPlay, contentDescription = null) },
+                                            label = { Text("Плейлисты") }
+                                        )
+                                        NavigationBarItem(
+                                            selected = currentScreen == Screen.Settings || currentScreen == Screen.Themes,
+                                            onClick = { currentScreen = Screen.Settings },
+                                            icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                                            label = { Text("Настройки") }
+                                        )
+                                    }
                                 }
-                            )
+                            }
                         }
-                        currentScreen == "library" -> {
-                            LibraryScreen(
-                                onTrackClick = { track ->
-                                    val mediaItem = MediaItem.fromUri(track.uri)
-                                    exoPlayer.setMediaItem(mediaItem)
-                                    exoPlayer.prepare()
-                                    exoPlayer.play()
-                                    currentTrackTitle = track.title
-                                    currentScreen = "player"
-                                },
-                                onOpenThemes = { showThemes = true }
-                            )
-                        }
-                        currentScreen == "player" -> {
-                            PlayerScreen(
-                                player = exoPlayer,
-                                title = currentTrackTitle,
-                                onBack = { currentScreen = "library" }
-                            )
+                    ) { paddingValues ->
+                        Box(modifier = Modifier.padding(paddingValues)) {
+                            when (currentScreen) {
+                                Screen.Files -> FileManagerScreen(
+                                    onPlayAudio = { uri, name -> externalAudioUri = uri },
+                                    onPlayPlaylist = { uri, name -> externalPlaylistUri = uri }
+                                )
+                                Screen.Playlists -> {
+                                    // Заглушка для плейлистов (пока просто кнопка открытия файла)
+                                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        Text("Откройте .m3u файл в менеджере файлов, чтобы играть плейлисты")
+                                    }
+                                }
+                                Screen.Settings -> SettingsScreen(
+                                    onOpenThemes = { currentScreen = Screen.Themes }
+                                )
+                                Screen.Themes -> ThemePickerScreen(
+                                    current = currentTheme,
+                                    allThemes = repo.getAllThemes(), // Передаем встроенные темы
+                                    onSelect = { theme ->
+                                        currentTheme = theme
+                                        currentScreen = Screen.Settings
+                                    }
+                                )
+                                Screen.Player -> PlayerScreen(
+                                    player = exoPlayer,
+                                    title = currentTrackTitle,
+                                    onBack = { currentScreen = Screen.Files }
+                                )
+                            }
                         }
                     }
                 }
@@ -115,8 +198,40 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         if (intent?.action == Intent.ACTION_VIEW) {
-            intent.data?.let { uri -> externalUri = uri }
+            val uri = intent.data ?: return
+            val mime = intent.type ?: ""
+            val path = uri.path?.lowercase() ?: ""
+
+            if (path.endsWith(".dxth") || mime == "application/zip" || mime == "application/octet-stream") {
+                externalThemeUri = uri
+            } else if (path.endsWith(".m3u") || path.endsWith(".m3u8") || mime.contains("mpegurl")) {
+                externalPlaylistUri = uri
+            } else {
+                externalAudioUri = uri
+            }
         }
+    }
+
+    // Парсер M3U плейлистов
+    private fun parseM3u(context: android.content.Context, uri: Uri): List<MediaItem> {
+        val items = mutableListOf<MediaItem>()
+        try {
+            context.contentResolver.openInputStream(uri)?.bufferedReader()?.useLines { lines ->
+                lines.forEach { line ->
+                    val trimmed = line.trim()
+                    if (trimmed.isNotEmpty() && !trimmed.startsWith("#")) {
+                        // Если путь относительный, пытаемся сделать его абсолютным
+                        val file = File(trimmed)
+                        if (file.exists()) {
+                            items.add(MediaItem.fromUri(Uri.fromFile(file)))
+                        } else if (trimmed.startsWith("http")) {
+                            items.add(MediaItem.fromUri(trimmed))
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+        return items
     }
 
     override fun onDestroy() {
@@ -127,85 +242,23 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun LibraryScreen(
-    onTrackClick: (AudioTrack) -> Unit,
-    onOpenThemes: () -> Unit
-) {
-    val context = LocalContext.current
-    var tracks by remember { mutableStateOf<List<AudioTrack>>(emptyList()) }
-    var hasPermission by remember { mutableStateOf(false) }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        hasPermission = permissions.values.all { it }
-    }
-
-    LaunchedEffect(Unit) {
-        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_AUDIO
-        } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        }
-
-        if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
-            hasPermission = true
-            tracks = AudioRepository.getAudioFiles(context)
-        } else {
-            permissionLauncher.launch(arrayOf(permission))
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
+fun MiniPlayer(title: String, isPlaying: Boolean, onPlayPause: () -> Unit, onClick: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth().clickable { onClick() }
+    ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Моя музыка", style = MaterialTheme.typography.titleLarge)
-            TextButton(onClick = onOpenThemes) { Text("Темы") }
-        }
-
-        if (!hasPermission) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Button(onClick = {
-                    val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        Manifest.permission.READ_MEDIA_AUDIO
-                    } else {
-                        Manifest.permission.READ_EXTERNAL_STORAGE
-                    }
-                    permissionLauncher.launch(arrayOf(permission))
-                }) {
-                    Text("Дать доступ к музыке")
-                }
-            }
-        } else if (tracks.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Музыка не найдена")
-            }
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(tracks) { track ->
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onTrackClick(track) }
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
-                    ) {
-                        Text(
-                            text = track.title,
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = track.artist,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    HorizontalDivider()
-                }
+            Text(
+                text = title,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            IconButton(onClick = onPlayPause) {
+                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null)
             }
         }
     }
@@ -221,33 +274,22 @@ fun PlayerScreen(
     var currentPosition by remember { mutableStateOf(player.currentPosition) }
     var duration by remember { mutableStateOf(player.duration) }
 
-    // Слушатель изменений состояния плеера
     DisposableEffect(player) {
         val listener = object : Player.Listener {
-            override fun onIsPlayingChanged(playing: Boolean) {
-                isPlaying = playing
-            }
+            override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
             override fun onPlaybackStateChanged(playbackState: Int) {
                 duration = player.duration
-                if (playbackState == Player.STATE_ENDED) {
-                    isPlaying = false
-                }
             }
         }
         player.addListener(listener)
-        onDispose {
-            player.removeListener(listener)
-        }
+        onDispose { player.removeListener(listener) }
     }
 
-    // Безопасный таймер обновления ползунка
     LaunchedEffect(player) {
         while (true) {
             currentPosition = player.currentPosition
-            if (player.duration > 0) {
-                duration = player.duration
-            }
-            delay(500) // Обновляем дважды в секунду
+            if (player.duration > 0) duration = player.duration
+            delay(500)
         }
     }
 
@@ -259,13 +301,24 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Назад")
-            }
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Назад") }
             Text("Сейчас играет", style = MaterialTheme.typography.titleMedium)
         }
 
         Spacer(modifier = Modifier.weight(1f))
+
+        // Красивая "обложка"
+        Surface(
+            modifier = Modifier.size(240.dp),
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.primaryContainer
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(100.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
 
         Text(
             text = title,
@@ -282,10 +335,7 @@ fun PlayerScreen(
             valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f)
         )
         
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(formatTime(currentPosition), style = MaterialTheme.typography.bodySmall)
             Text(formatTime(duration), style = MaterialTheme.typography.bodySmall)
         }
@@ -297,6 +347,12 @@ fun PlayerScreen(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            IconButton(onClick = { player.seekToPrevious() }, modifier = Modifier.size(64.dp)) {
+                Icon(Icons.Default.SkipPrevious, contentDescription = "Предыдущий", modifier = Modifier.size(36.dp))
+            }
+            
+            Spacer(modifier = Modifier.width(24.dp))
+
             Button(
                 onClick = { 
                     if (isPlaying) player.pause() 
@@ -313,6 +369,12 @@ fun PlayerScreen(
                     contentDescription = "Play/Pause",
                     modifier = Modifier.size(48.dp)
                 )
+            }
+
+            Spacer(modifier = Modifier.width(24.dp))
+
+            IconButton(onClick = { player.seekToNext() }, modifier = Modifier.size(64.dp)) {
+                Icon(Icons.Default.SkipNext, contentDescription = "Следующий", modifier = Modifier.size(36.dp))
             }
         }
         
