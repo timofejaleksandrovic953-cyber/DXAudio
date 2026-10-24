@@ -48,6 +48,7 @@ dependencies {
     implementation("io.github.anilbeesetti:nextlib-media3ext:1.11.1-0.16.0")
 
     // Jetpack Compose
+    implementation("androidx.compose.material:material-icons-extended")
     implementation(platform("androidx.compose:compose-bom:2023.10.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
