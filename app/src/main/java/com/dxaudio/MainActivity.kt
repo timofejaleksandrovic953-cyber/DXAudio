@@ -21,7 +21,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -52,7 +51,6 @@ sealed class Screen {
 
 class MainActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
-    
     private var externalAudioUri by mutableStateOf<Uri?>(null)
     private var externalThemeUri by mutableStateOf<Uri?>(null)
     private var externalPlaylistUri by mutableStateOf<Uri?>(null)
@@ -65,9 +63,11 @@ class MainActivity : ComponentActivity() {
             val context = LocalContext.current
             val repo = remember { ThemeRepository(context) }
             
-            // Загружаем сохраненную тему
             var currentTheme by remember { mutableStateOf(repo.getSavedTheme()) }
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Files) }
+            
+            // Глобальные настройки
+            var autoShowLyrics by remember { mutableStateOf(false) }
             
             var currentTrackTitle by remember { mutableStateOf("Ничего не играет") }
             var currentLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
@@ -118,7 +118,7 @@ class MainActivity : ComponentActivity() {
                     val theme = repo.importTheme(uri)
                     if (theme != null) {
                         currentTheme = theme
-                        repo.saveThemeId(theme.id) // Сохраняем
+                        repo.saveThemeId(theme.id)
                     }
                     externalThemeUri = null
                 }
@@ -149,13 +149,17 @@ class MainActivity : ComponentActivity() {
                                     onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri }
                                 )
                                 Screen.Playlists -> PlaylistsScreen(onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri })
-                                Screen.Settings -> SettingsScreen(onOpenThemes = { currentScreen = Screen.Themes })
+                                Screen.Settings -> SettingsScreen(
+                                    onOpenThemes = { currentScreen = Screen.Themes },
+                                    autoShowLyrics = autoShowLyrics,
+                                    onAutoShowLyricsChange = { autoShowLyrics = it }
+                                )
                                 Screen.Themes -> ThemePickerScreen(
                                     current = currentTheme,
                                     allThemes = repo.getAllThemes(),
                                     onSelect = { theme -> 
                                         currentTheme = theme
-                                        repo.saveThemeId(theme.id) // Сохраняем при выборе
+                                        repo.saveThemeId(theme.id)
                                         currentScreen = Screen.Settings 
                                     }
                                 )
@@ -164,6 +168,7 @@ class MainActivity : ComponentActivity() {
                                     player = exoPlayer,
                                     title = currentTrackTitle,
                                     lyrics = currentLyrics,
+                                    autoShowLyrics = autoShowLyrics,
                                     onBack = { currentScreen = Screen.Files }
                                 )
                             }
@@ -255,12 +260,16 @@ fun PlayerScreen(
     player: ExoPlayer,
     title: String,
     lyrics: List<LyricLine>,
+    autoShowLyrics: Boolean,
     onBack: () -> Unit
 ) {
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
     var currentPosition by remember { mutableStateOf(player.currentPosition) }
     var duration by remember { mutableStateOf(player.duration) }
-    var showLyrics by remember { mutableStateOf(false) }
+    
+    // Если включен автопоказ и есть текст - открываем сразу
+    var showLyrics by remember { mutableStateOf(autoShowLyrics && lyrics.isNotEmpty()) }
+    
     val listState = rememberLazyListState()
 
     DisposableEffect(player) {
@@ -287,7 +296,6 @@ fun PlayerScreen(
         }
     }
 
-    // Красивый градиентный фон
     val gradient = Brush.verticalGradient(
         colors = listOf(theme.primary.copy(alpha = 0.15f), theme.background),
         startY = 0f,
@@ -321,7 +329,6 @@ fun PlayerScreen(
             }
         } else {
             Spacer(modifier = Modifier.weight(1f))
-            // Красивая "обложка" с тенью
             Surface(
                 modifier = Modifier.size(260.dp).shadow(12.dp, MaterialTheme.shapes.extraLarge),
                 shape = MaterialTheme.shapes.extraLarge, 
@@ -336,7 +343,6 @@ fun PlayerScreen(
             Spacer(modifier = Modifier.weight(1f))
         }
 
-        // Стилизованный слайдер
         Slider(
             value = currentPosition.toFloat().coerceIn(0f, if (duration > 0) duration.toFloat() else 1f),
             onValueChange = { player.seekTo(it.toLong()) },
@@ -355,13 +361,11 @@ fun PlayerScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Кнопки управления
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { player.seekToPrevious() }, modifier = Modifier.size(64.dp)) {
                 Icon(Icons.Default.SkipPrevious, contentDescription = "Предыдущий", modifier = Modifier.size(40.dp), tint = theme.onSurface)
             }
             Spacer(modifier = Modifier.width(24.dp))
-            // Главная кнопка Play
             Surface(
                 modifier = Modifier.size(84.dp).clickable { 
                     if (isPlaying) player.pause() 
