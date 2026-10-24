@@ -30,51 +30,38 @@ fun ThemePickerScreen(
     val repo = remember { ThemeRepository(context) }
     var themes by remember { mutableStateOf(allThemes) }
 
-    // Лаунчер для импорта .dxth файлов
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val newTheme = repo.importTheme(uri)
             if (newTheme != null) {
-                // Обновляем список тем после успешного импорта
-                themes = repo.getAllThemes() 
+                themes = repo.getAllThemes()
             }
         }
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
+        modifier = Modifier.fillMaxSize()
     ) {
-        Text(
-            text = "Оформление", 
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        
-        Spacer(Modifier.height(16.dp))
-        
-        Button(
-            onClick = { picker.launch(arrayOf("*/*")) }, 
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Импортировать файл .dxth")
+        Column(Modifier.padding(16.dp)) {
+            Text("Оформление", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = { picker.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Импортировать файл .dxth")
+            }
         }
         
-        Spacer(Modifier.height(16.dp))
-        
         LazyColumn(
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 32.dp) // Плавнее скролл в конце списка
         ) {
             items(themes, key = { it.id }) { theme ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onSelect(theme) }
-                        .padding(vertical = 12.dp, horizontal = 8.dp),
+                        .padding(vertical = 12.dp, horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Кружок с основным цветом темы
                     Box(
                         modifier = Modifier
                             .size(40.dp)
@@ -85,25 +72,12 @@ fun ThemePickerScreen(
                     Spacer(Modifier.width(16.dp))
                     
                     Column(Modifier.weight(1f)) {
-                        Text(
-                            text = theme.name, 
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Text(
-                            text = "от ${theme.author}", 
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Text(theme.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                        Text("от ${theme.author}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     
-                    // Галочка текущей темы
                     if (theme.id == current.id) {
-                        Icon(
-                            imageVector = Icons.Default.Check,
-                            contentDescription = "Выбрано",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                        Icon(Icons.Default.Check, contentDescription = "Выбрано", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
