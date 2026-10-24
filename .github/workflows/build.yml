@@ -1,8 +1,6 @@
 name: Build DXAudio APK
 
 on:
-  push:
-    branches: [ "main" ]
   workflow_dispatch: # Позволяет запускать сборку вручную из вкладки Actions
 
 jobs:
