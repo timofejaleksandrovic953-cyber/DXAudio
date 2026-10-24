@@ -222,6 +222,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @Composable
     private fun navColors(theme: DxTheme) = NavigationBarItemDefaults.colors(
         selectedIconColor = theme.onPrimary, selectedTextColor = theme.primary,
         indicatorColor = theme.primary, unselectedIconColor = theme.onSurface.copy(alpha = 0.6f),
