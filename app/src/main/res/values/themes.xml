@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Базовая тема без ActionBar для использования с Jetpack Compose -->
+    <style name="Theme.DXAudio" parent="android:Theme.Material.NoActionBar">
+        <!-- Устанавливаем черный фон окна, чтобы не было белой вспышки при запуске -->
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>
