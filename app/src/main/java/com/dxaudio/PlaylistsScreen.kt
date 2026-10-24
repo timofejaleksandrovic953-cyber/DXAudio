@@ -1,0 +1,92 @@
+package com.dxaudio
+
+import android.net.Uri
+import android.os.Environment
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+
+@Composable
+fun PlaylistsScreen(
+    onPlayPlaylist: (Uri, String) -> Unit
+) {
+    var playlists by remember { mutableStateOf<List<File>>(emptyList()) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var newPlaylistName by remember { mutableStateOf("") }
+
+    val playlistsDir = remember { File(Environment.getExternalStorageDirectory(), "Music/DXAudio_Playlists").apply { mkdirs() } }
+
+    fun refreshPlaylists() {
+        playlists = playlistsDir.listFiles { file -> file.name.endsWith(".m3u", true) }?.toList() ?: emptyList()
+    }
+
+    LaunchedEffect(Unit) { refreshPlaylists() }
+
+    if (showCreateDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreateDialog = false },
+            title = { Text("Новый плейлист") },
+            text = { OutlinedTextField(value = newPlaylistName, onValueChange = { newPlaylistName = it }, label = { Text("Название") }) },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (newPlaylistName.isNotBlank()) {
+                        val file = File(playlistsDir, "${newPlaylistName}.m3u")
+                        file.writeText("#EXTM3U\n")
+                        refreshPlaylists()
+                    }
+                    showCreateDialog = false
+                    newPlaylistName = ""
+                }) { Text("Создать") }
+            },
+            dismissButton = { TextButton(onClick = { showCreateDialog = false }) { Text("Отмена") } }
+        )
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Плейлисты", style = MaterialTheme.typography.titleLarge)
+            Button(onClick = { showCreateDialog = true }) {
+                Icon(Icons.Default.Add, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Создать")
+            }
+        }
+
+        if (playlists.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Плейлистов пока нет")
+            }
+        } else {
+            LazyColumn {
+                items(playlists) { file ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { onPlayPlaylist(Uri.fromFile(file), file.name) }.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.PlaylistPlay, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(12.dp))
+                        Text(file.nameWithoutExtension, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    HorizontalDivider()
+                }
+            }
+        }
+    }
+}
