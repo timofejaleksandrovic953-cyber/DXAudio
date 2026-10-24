@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">DXAudio</string>
+    <string name="themes">Темы</string>
+    <string name="import_theme">Импортировать .dxth</string>
+</resources>
