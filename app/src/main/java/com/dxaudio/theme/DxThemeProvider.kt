@@ -15,6 +15,8 @@ fun DxThemeProvider(theme: DxTheme, content: @Composable () -> Unit) {
         onBackground = theme.onBackground,
         surface = theme.surface,
         onSurface = theme.onSurface,
+        surfaceVariant = theme.surface, // Добавили для нижней панели и мини-плеера
+        onSurfaceVariant = theme.onSurface,
         error = theme.accent
     )
     MaterialTheme(
