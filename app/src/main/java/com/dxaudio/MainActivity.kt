@@ -45,7 +45,7 @@ class MainActivity : ComponentActivity() {
                         )
                     } else {
                         // Экран плеера
-                        androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
+                        Column(Modifier.fillMaxSize()) {
                             Button(
                                 onClick = { showThemes = true },
                                 modifier = Modifier.padding(16.dp)
