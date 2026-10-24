@@ -28,11 +28,12 @@ fun FileManagerScreen(
 ) {
     var currentDir by remember { mutableStateOf(Environment.getExternalStorageDirectory()) }
     var files by remember { mutableStateOf<List<File>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(false) } // Индикатор загрузки
 
     LaunchedEffect(currentDir) {
+        isLoading = true
         withContext(Dispatchers.IO) {
             val list = currentDir.listFiles()?.toList() ?: emptyList()
-            // Фильтруем: оставляем папки, аудио, плейлисты и тексты (.lrc)
             val filtered = list.filter { file ->
                 file.isDirectory || 
                 file.name.endsWith(".mp3", true) || 
@@ -46,6 +47,7 @@ fun FileManagerScreen(
             }
             files = filtered.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
         }
+        isLoading = false
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -57,48 +59,54 @@ fun FileManagerScreen(
             overflow = TextOverflow.Ellipsis
         )
 
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            if (currentDir.parentFile != null) {
-                item {
+        if (isLoading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                if (currentDir.parentFile != null) {
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable { currentDir = currentDir.parentFile!! }.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(".. (Наверх)", style = MaterialTheme.typography.bodyLarge)
+                        }
+                        HorizontalDivider()
+                    }
+                }
+
+                items(files, key = { it.absolutePath }) { file ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().clickable { currentDir = currentDir.parentFile!! }.padding(16.dp),
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            if (file.isDirectory) {
+                                currentDir = file
+                            } else {
+                                val name = file.name.lowercase()
+                                if (name.endsWith(".m3u") || name.endsWith(".m3u8")) {
+                                    onPlayPlaylist(Uri.fromFile(file), file.name)
+                                } else if (!name.endsWith(".lrc")) {
+                                    onPlayAudio(Uri.fromFile(file), file.name)
+                                }
+                            }
+                        }.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        val icon = when {
+                            file.isDirectory -> Icons.Default.Folder
+                            file.name.endsWith(".m3u", true) || file.name.endsWith(".m3u8", true) -> Icons.Default.PlaylistPlay
+                            file.name.endsWith(".lrc", true) -> Icons.Default.Subject
+                            else -> Icons.Default.MusicNote
+                        }
+                        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text(".. (Наверх)", style = MaterialTheme.typography.bodyLarge)
+                        Text(text = file.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     HorizontalDivider()
                 }
-            }
-
-            items(files) { file ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().clickable {
-                        if (file.isDirectory) {
-                            currentDir = file
-                        } else {
-                            val name = file.name.lowercase()
-                            if (name.endsWith(".m3u") || name.endsWith(".m3u8")) {
-                                onPlayPlaylist(Uri.fromFile(file), file.name)
-                            } else if (!name.endsWith(".lrc")) {
-                                onPlayAudio(Uri.fromFile(file), file.name)
-                            }
-                        }
-                    }.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val icon = when {
-                        file.isDirectory -> Icons.Default.Folder
-                        file.name.endsWith(".m3u", true) || file.name.endsWith(".m3u8", true) -> Icons.Default.PlaylistPlay
-                        file.name.endsWith(".lrc", true) -> Icons.Default.Subject
-                        else -> Icons.Default.MusicNote
-                    }
-                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(text = file.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                HorizontalDivider()
             }
         }
     }
