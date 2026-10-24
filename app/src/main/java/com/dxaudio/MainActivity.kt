@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Pause
@@ -34,7 +35,6 @@ import com.dxaudio.theme.DxThemeProvider
 import com.dxaudio.theme.ThemeRepository
 import com.dxaudio.ui.ThemePickerScreen
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
                 ExoPlayer.Builder(context).build().also { player = it }
             }
 
+            // Обработка открытия файла через "Открыть с помощью..."
             LaunchedEffect(externalUri) {
                 externalUri?.let { uri ->
                     val mediaItem = MediaItem.fromUri(uri)
@@ -220,6 +221,7 @@ fun PlayerScreen(
     var currentPosition by remember { mutableStateOf(player.currentPosition) }
     var duration by remember { mutableStateOf(player.duration) }
 
+    // Слушатель изменений состояния плеера
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
@@ -233,22 +235,19 @@ fun PlayerScreen(
             }
         }
         player.addListener(listener)
-        
-        val coroutineScope = rememberCoroutineScope()
-        val job = coroutineScope.launch {
-            while (true) {
-                currentPosition = player.currentPosition
-                if (player.isPlaying) {
-                    delay(500)
-                } else {
-                    delay(1000)
-                }
-            }
-        }
-
         onDispose {
             player.removeListener(listener)
-            job.cancel()
+        }
+    }
+
+    // Безопасный таймер обновления ползунка
+    LaunchedEffect(player) {
+        while (true) {
+            currentPosition = player.currentPosition
+            if (player.duration > 0) {
+                duration = player.duration
+            }
+            delay(500) // Обновляем дважды в секунду
         }
     }
 
@@ -307,7 +306,7 @@ fun PlayerScreen(
                     }
                 },
                 modifier = Modifier.size(80.dp),
-                shape = androidx.compose.foundation.shape.CircleShape
+                shape = CircleShape
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
