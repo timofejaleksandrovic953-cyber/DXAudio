@@ -8,7 +8,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Subject
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,12 +32,23 @@ fun FileManagerScreen(
     LaunchedEffect(currentDir) {
         withContext(Dispatchers.IO) {
             val list = currentDir.listFiles()?.toList() ?: emptyList()
-            files = list.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+            // Фильтруем: оставляем папки, аудио, плейлисты и тексты (.lrc)
+            val filtered = list.filter { file ->
+                file.isDirectory || 
+                file.name.endsWith(".mp3", true) || 
+                file.name.endsWith(".flac", true) || 
+                file.name.endsWith(".wav", true) || 
+                file.name.endsWith(".ogg", true) || 
+                file.name.endsWith(".m4a", true) ||
+                file.name.endsWith(".m3u", true) ||
+                file.name.endsWith(".m3u8", true) ||
+                file.name.endsWith(".lrc", true)
+            }
+            files = filtered.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
         }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Хлебные крошки / Текущая папка
         Text(
             text = currentDir.absolutePath,
             style = MaterialTheme.typography.bodySmall,
@@ -55,6 +68,7 @@ fun FileManagerScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(".. (Наверх)", style = MaterialTheme.typography.bodyLarge)
                     }
+                    HorizontalDivider()
                 }
             }
 
@@ -65,27 +79,24 @@ fun FileManagerScreen(
                             currentDir = file
                         } else {
                             val name = file.name.lowercase()
-                            if (name.endsWith(".mp3") || name.endsWith(".flac") || name.endsWith(".wav") || name.endsWith(".ogg") || name.endsWith(".m4a")) {
-                                onPlayAudio(Uri.fromFile(file), file.name)
-                            } else if (name.endsWith(".m3u") || name.endsWith(".m3u8")) {
+                            if (name.endsWith(".m3u") || name.endsWith(".m3u8")) {
                                 onPlayPlaylist(Uri.fromFile(file), file.name)
+                            } else if (!name.endsWith(".lrc")) {
+                                onPlayAudio(Uri.fromFile(file), file.name)
                             }
                         }
                     }.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (file.isDirectory) {
-                        Icon(Icons.Default.Folder, contentDescription = null)
-                    } else {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                    val icon = when {
+                        file.isDirectory -> Icons.Default.Folder
+                        file.name.endsWith(".m3u", true) || file.name.endsWith(".m3u8", true) -> Icons.Default.PlaylistPlay
+                        file.name.endsWith(".lrc", true) -> Icons.Default.Subject
+                        else -> Icons.Default.MusicNote
                     }
+                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = file.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Text(text = file.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 HorizontalDivider()
             }
