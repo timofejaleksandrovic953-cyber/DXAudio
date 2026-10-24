@@ -16,26 +16,28 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.compose.material3.Player
-import com.dxaudio.theme.DxTheme
 import com.dxaudio.theme.DxThemeProvider
 import com.dxaudio.theme.ThemeRepository
 import com.dxaudio.ui.ThemePickerScreen
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
-
-    // Храним URI, если приложение открыли через "Открыть с помощью"
     private var externalUri by mutableStateOf<Uri?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,20 +49,15 @@ class MainActivity : ComponentActivity() {
             val repo = remember { ThemeRepository(context) }
             var currentTheme by remember { mutableStateOf(repo.defaultTheme()) }
             
-            // Состояния экранов
             var currentScreen by remember { mutableStateOf("library") }
             var showThemes by remember { mutableStateOf(false) }
             
-            // Текущий играющий трек
             var currentTrackTitle by remember { mutableStateOf("") }
-            var currentTrackUri by remember { mutableStateOf<Uri?>(null) }
 
-            // Инициализация плеера
             val exoPlayer = remember {
                 ExoPlayer.Builder(context).build().also { player = it }
             }
 
-            // Если пришел интент извне — сразу включаем плеер
             LaunchedEffect(externalUri) {
                 externalUri?.let { uri ->
                     val mediaItem = MediaItem.fromUri(uri)
@@ -68,7 +65,6 @@ class MainActivity : ComponentActivity() {
                     exoPlayer.prepare()
                     exoPlayer.play()
                     currentTrackTitle = "Внешний файл"
-                    currentTrackUri = uri
                     currentScreen = "player"
                 }
             }
@@ -93,7 +89,6 @@ class MainActivity : ComponentActivity() {
                                     exoPlayer.prepare()
                                     exoPlayer.play()
                                     currentTrackTitle = track.title
-                                    currentTrackUri = track.uri
                                     currentScreen = "player"
                                 },
                                 onOpenThemes = { showThemes = true }
@@ -112,7 +107,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Обработка "Открыть с помощью"
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
@@ -120,9 +114,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         if (intent?.action == Intent.ACTION_VIEW) {
-            intent.data?.let { uri ->
-                externalUri = uri
-            }
+            intent.data?.let { uri -> externalUri = uri }
         }
     }
 
@@ -142,7 +134,6 @@ fun LibraryScreen(
     var tracks by remember { mutableStateOf<List<AudioTrack>>(emptyList()) }
     var hasPermission by remember { mutableStateOf(false) }
 
-    // Запрос разрешений
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -165,7 +156,6 @@ fun LibraryScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Шапка
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -226,26 +216,115 @@ fun PlayerScreen(
     title: String,
     onBack: () -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
+    var isPlaying by remember { mutableStateOf(player.isPlaying) }
+    var currentPosition by remember { mutableStateOf(player.currentPosition) }
+    var duration by remember { mutableStateOf(player.duration) }
+
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                duration = player.duration
+                if (playbackState == Player.STATE_ENDED) {
+                    isPlaying = false
+                }
+            }
+        }
+        player.addListener(listener)
+        
+        val coroutineScope = rememberCoroutineScope()
+        val job = coroutineScope.launch {
+            while (true) {
+                currentPosition = player.currentPosition
+                if (player.isPlaying) {
+                    delay(500)
+                } else {
+                    delay(1000)
+                }
+            }
+        }
+
+        onDispose {
+            player.removeListener(listener)
+            job.cancel()
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
                 Icon(Icons.Default.ArrowBack, contentDescription = "Назад")
             }
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Text("Сейчас играет", style = MaterialTheme.typography.titleMedium)
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        Slider(
+            value = currentPosition.toFloat().coerceIn(0f, if (duration > 0) duration.toFloat() else 1f),
+            onValueChange = { player.seekTo(it.toLong()) },
+            valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f)
+        )
+        
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(formatTime(currentPosition), style = MaterialTheme.typography.bodySmall)
+            Text(formatTime(duration), style = MaterialTheme.typography.bodySmall)
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(
+                onClick = { 
+                    if (isPlaying) player.pause() 
+                    else {
+                        if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+                        player.play() 
+                    }
+                },
+                modifier = Modifier.size(80.dp),
+                shape = androidx.compose.foundation.shape.CircleShape
+            ) {
+                Icon(
+                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = "Play/Pause",
+                    modifier = Modifier.size(48.dp)
+                )
+            }
         }
         
-        // Стандартный UI-плеер от Media3
-        Player(
-            player = player,
-            modifier = Modifier.fillMaxWidth()
-        )
+        Spacer(modifier = Modifier.height(64.dp))
     }
+}
+
+fun formatTime(ms: Long): String {
+    if (ms <= 0) return "0:00"
+    val totalSeconds = ms / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%d:%02d".format(minutes, seconds)
 }
