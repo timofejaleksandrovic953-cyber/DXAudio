@@ -1,6 +1,7 @@
 package com.dxaudio
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -10,6 +11,7 @@ import android.media.AudioManager
 import android.media.MediaMetadataRetriever
 import android.media.audiofx.Visualizer
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import androidx.activity.ComponentActivity
@@ -55,11 +57,13 @@ import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import com.dxaudio.theme.DxTheme
 import com.dxaudio.theme.DxThemeProvider
 import com.dxaudio.theme.ThemeRepository
 import com.dxaudio.ui.ThemePickerScreen
+import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -79,7 +83,7 @@ sealed class Screen {
 }
 
 class MainActivity : ComponentActivity() {
-    private var player: ExoPlayer? = null
+    private var controllerFuture: ListenableFuture<MediaController>? = null
     private var externalAudioUri by mutableStateOf<Uri?>(null)
     private var externalThemeUri by mutableStateOf<Uri?>(null)
     private var externalPlaylistUri by mutableStateOf<Uri?>(null)
@@ -88,11 +92,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         handleIntent(intent)
 
+        // Инициализация MediaController для связи с сервисом
+        val sessionToken = SessionToken(this, ComponentName(this, PlaybackService::class.java))
+        controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
+
         setContent {
             val context = LocalContext.current
             val repo = remember { ThemeRepository(context) }
             val prefs = remember { context.getSharedPreferences("dx_prefs", Context.MODE_PRIVATE) }
             
+            var mediaController by remember { mutableStateOf<MediaController?>(null) }
             var currentTheme by remember { mutableStateOf(repo.getSavedTheme()) }
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Files) }
             
@@ -104,27 +113,49 @@ class MainActivity : ComponentActivity() {
             var currentLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
             var isPlaying by remember { mutableStateOf(false) }
 
-            val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
+            // Подключение к сервису
             LaunchedEffect(Unit) {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                }
+                controllerFuture?.addListener({
+                    try {
+                        mediaController = controllerFuture?.get()
+                    } catch (e: Exception) { e.printStackTrace() }
+                }, ContextCompat.getMainExecutor(context))
             }
 
-            val exoPlayer = remember {
-                ExoPlayer.Builder(context).build().also { 
-                    player = it
-                    it.addListener(object : Player.Listener {
-                        override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
-                    })
+            // Запрос разрешений (Микрофон + Уведомления)
+            val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ -> }
+            LaunchedEffect(Unit) {
+                val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    permissions.add(Manifest.permission.POST_NOTIFICATIONS)
                 }
+                permissionLauncher.launch(permissions.toTypedArray())
+            }
+
+            // Слушаем состояние плеера
+            LaunchedEffect(mediaController) {
+                mediaController?.addListener(object : Player.Listener {
+                    override fun onIsPlayingChanged(playing: Boolean) {
+                        isPlaying = playing
+                    }
+                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        // Обновляем метаданные при смене трека в плейлисте
+                        mediaItem?.mediaId?.let { uriStr ->
+                            val uri = Uri.parse(uriStr)
+                            withContext(Dispatchers.IO) {
+                                currentLyrics = loadLyrics(context, uri)
+                                currentMetadata = loadMetadata(context, uri)
+                            }
+                        }
+                    }
+                })
             }
 
             LaunchedEffect(externalAudioUri) {
                 externalAudioUri?.let { uri ->
-                    exoPlayer.setMediaItem(MediaItem.fromUri(uri))
-                    exoPlayer.prepare()
-                    exoPlayer.play()
+                    mediaController?.setMediaItem(MediaItem.Builder().setUri(uri).setMediaId(uri.toString()).build())
+                    mediaController?.prepare()
+                    mediaController?.play()
                     withContext(Dispatchers.IO) {
                         currentLyrics = loadLyrics(context, uri)
                         currentMetadata = loadMetadata(context, uri)
@@ -140,9 +171,9 @@ class MainActivity : ComponentActivity() {
                         val mediaItems = parseM3u(context, uri)
                         if (mediaItems.isNotEmpty()) {
                             withContext(Dispatchers.Main) {
-                                exoPlayer.setMediaItems(mediaItems)
-                                exoPlayer.prepare()
-                                exoPlayer.play()
+                                mediaController?.setMediaItems(mediaItems)
+                                mediaController?.prepare()
+                                mediaController?.play()
                                 currentLyrics = emptyList()
                                 currentMetadata = AudioMetadata("Плейлист", "", "", null)
                                 currentScreen = Screen.Player
@@ -161,59 +192,64 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            DxThemeProvider(currentTheme) {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    Scaffold(
-                        bottomBar = {
-                            if (currentScreen != Screen.Player) {
-                                Column {
-                                    if (currentMetadata != null) {
-                                        MiniPlayer(currentTheme, currentMetadata!!.title, isPlaying, { if (isPlaying) exoPlayer.pause() else exoPlayer.play() }, { currentScreen = Screen.Player })
-                                    }
-                                    NavigationBar(containerColor = currentTheme.surface) {
-                                        NavigationBarItem(selected = currentScreen == Screen.Files, onClick = { currentScreen = Screen.Files }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Файлы") }, colors = navColors(currentTheme))
-                                        NavigationBarItem(selected = currentScreen == Screen.Playlists, onClick = { currentScreen = Screen.Playlists }, icon = { Icon(Icons.Default.PlaylistPlay, null) }, label = { Text("Плейлисты") }, colors = navColors(currentTheme))
-                                        NavigationBarItem(selected = currentScreen == Screen.Settings || currentScreen == Screen.Themes, onClick = { currentScreen = Screen.Settings }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Настройки") }, colors = navColors(currentTheme))
+            if (mediaController != null) {
+                DxThemeProvider(currentTheme) {
+                    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                        Scaffold(
+                            bottomBar = {
+                                if (currentScreen != Screen.Player) {
+                                    Column {
+                                        if (currentMetadata != null) {
+                                            MiniPlayer(currentTheme, currentMetadata!!.title, isPlaying, { if (isPlaying) mediaController?.pause() else mediaController?.play() }, { currentScreen = Screen.Player })
+                                        }
+                                        NavigationBar(containerColor = currentTheme.surface) {
+                                            NavigationBarItem(selected = currentScreen == Screen.Files, onClick = { currentScreen = Screen.Files }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Файлы") }, colors = navColors(currentTheme))
+                                            NavigationBarItem(selected = currentScreen == Screen.Playlists, onClick = { currentScreen = Screen.Playlists }, icon = { Icon(Icons.Default.PlaylistPlay, null) }, label = { Text("Плейлисты") }, colors = navColors(currentTheme))
+                                            NavigationBarItem(selected = currentScreen == Screen.Settings || currentScreen == Screen.Themes, onClick = { currentScreen = Screen.Settings }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Настройки") }, colors = navColors(currentTheme))
+                                        }
                                     }
                                 }
                             }
-                        }
-                    ) { paddingValues ->
-                        Box(modifier = Modifier.padding(paddingValues)) {
-                            when (currentScreen) {
-                                Screen.Files -> FileManagerScreen(
-                                    onPlayAudio = { uri, _ -> externalAudioUri = uri },
-                                    onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri }
-                                )
-                                Screen.Playlists -> PlaylistsScreen(onPlayAudio = { uri, _ -> externalAudioUri = uri })
-                                Screen.Settings -> SettingsScreen(
-                                    onOpenThemes = { currentScreen = Screen.Themes },
-                                    autoShowLyrics = autoShowLyrics,
-                                    onAutoShowLyricsChange = { autoShowLyrics = it; prefs.edit().putBoolean("auto_lyrics", it).apply() },
-                                    visualizerStyle = visualizerStyle,
-                                    onVisualizerStyleChange = { visualizerStyle = it; prefs.edit().putString("viz_style", it).apply() },
-                                    visualizerColor = visualizerColor,
-                                    onVisualizerColorChange = { visualizerColor = it; prefs.edit().putString("viz_color", it).apply() }
-                                )
-                                Screen.Themes -> ThemePickerScreen(
-                                    current = currentTheme,
-                                    allThemes = repo.getAllThemes(),
-                                    onSelect = { theme -> currentTheme = theme; repo.saveThemeId(theme.id); currentScreen = Screen.Settings }
-                                )
-                                Screen.Player -> PlayerScreen(
-                                    theme = currentTheme,
-                                    player = exoPlayer,
-                                    metadata = currentMetadata,
-                                    lyrics = currentLyrics,
-                                    autoShowLyrics = autoShowLyrics,
-                                    visualizerStyle = visualizerStyle,
-                                    visualizerColor = visualizerColor,
-                                    onBack = { currentScreen = Screen.Files }
-                                )
+                        ) { paddingValues ->
+                            Box(modifier = Modifier.padding(paddingValues)) {
+                                when (currentScreen) {
+                                    Screen.Files -> FileManagerScreen(
+                                        onPlayAudio = { uri, _ -> externalAudioUri = uri },
+                                        onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri }
+                                    )
+                                    Screen.Playlists -> PlaylistsScreen(onPlayAudio = { uri, _ -> externalAudioUri = uri })
+                                    Screen.Settings -> SettingsScreen(
+                                        onOpenThemes = { currentScreen = Screen.Themes },
+                                        autoShowLyrics = autoShowLyrics,
+                                        onAutoShowLyricsChange = { autoShowLyrics = it; prefs.edit().putBoolean("auto_lyrics", it).apply() },
+                                        visualizerStyle = visualizerStyle,
+                                        onVisualizerStyleChange = { visualizerStyle = it; prefs.edit().putString("viz_style", it).apply() },
+                                        visualizerColor = visualizerColor,
+                                        onVisualizerColorChange = { visualizerColor = it; prefs.edit().putString("viz_color", it).apply() }
+                                    )
+                                    Screen.Themes -> ThemePickerScreen(
+                                        current = currentTheme,
+                                        allThemes = repo.getAllThemes(),
+                                        onSelect = { theme -> currentTheme = theme; repo.saveThemeId(theme.id); currentScreen = Screen.Settings }
+                                    )
+                                    Screen.Player -> PlayerScreen(
+                                        theme = currentTheme,
+                                        player = mediaController!!,
+                                        metadata = currentMetadata,
+                                        lyrics = currentLyrics,
+                                        autoShowLyrics = autoShowLyrics,
+                                        visualizerStyle = visualizerStyle,
+                                        visualizerColor = visualizerColor,
+                                        onBack = { currentScreen = Screen.Files }
+                                    )
+                                }
                             }
                         }
                     }
                 }
+            } else {
+                // Загрузка...
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             }
         }
     }
@@ -225,26 +261,21 @@ class MainActivity : ComponentActivity() {
         unselectedTextColor = theme.onSurface.copy(alpha = 0.6f)
     )
 
-    // ИСПРАВЛЕНИЕ SAF: Ищем .lrc через DocumentFile
     private fun loadLyrics(context: Context, audioUri: Uri): List<LyricLine> {
+        // Код остается прежним (SAF)
         return try {
             val doc = DocumentFile.fromSingleUri(context, audioUri) ?: return emptyList()
             val parent = doc.parentFile ?: return emptyList()
             val baseName = doc.name?.substringBeforeLast(".") ?: return emptyList()
             val lrcDoc = parent.findFile("$baseName.lrc") ?: return emptyList()
-
             val lyrics = mutableListOf<LyricLine>()
             val regex = Regex("\\[(\\d{2}):(\\d{2}\\.\\d{2})](.*)")
             context.contentResolver.openInputStream(lrcDoc.uri)?.bufferedReader()?.useLines { lines ->
                 lines.forEach { line ->
                     val match = regex.find(line)
                     if (match != null) {
-                        val min = match.groupValues[1].toLong()
-                        val sec = match.groupValues[2].toDouble()
-                        val text = match.groupValues[3].trim()
-                        if (text.isNotEmpty()) {
-                            lyrics.add(LyricLine((min * 60 * 1000) + (sec * 1000).toLong(), text))
-                        }
+                        val min = match.groupValues[1].toLong(); val sec = match.groupValues[2].toDouble(); val text = match.groupValues[3].trim()
+                        if (text.isNotEmpty()) lyrics.add(LyricLine((min * 60 * 1000) + (sec * 1000).toLong(), text))
                     }
                 }
             }
@@ -253,6 +284,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadMetadata(context: Context, uri: Uri): AudioMetadata {
+        // Код остается прежним
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(context, uri)
@@ -286,7 +318,8 @@ class MainActivity : ComponentActivity() {
                 lines.forEach { line ->
                     val trimmed = line.trim()
                     if (trimmed.isNotEmpty() && !trimmed.startsWith("#")) {
-                        items.add(MediaItem.fromUri(Uri.parse(trimmed)))
+                        val itemUri = Uri.parse(trimmed)
+                        items.add(MediaItem.Builder().setUri(itemUri).setMediaId(itemUri.toString()).build())
                     }
                 }
             }
@@ -294,9 +327,13 @@ class MainActivity : ComponentActivity() {
         return items
     }
 
-    override fun onDestroy() { super.onDestroy(); player?.release(); player = null }
+    override fun onDestroy() {
+        controllerFuture?.let { MediaController.releaseFuture(it) }
+        super.onDestroy()
+    }
 }
 
+// MiniPlayer и остальные Compose-функции остаются почти без изменений, меняем ExoPlayer на Player.
 @Composable
 fun MiniPlayer(theme: DxTheme, title: String, isPlaying: Boolean, onPlayPause: () -> Unit, onClick: () -> Unit) {
     Surface(color = theme.surface, modifier = Modifier.fillMaxWidth().padding(8.dp).shadow(4.dp, RoundedCornerShape(12.dp)).clickable { onClick() }, shape = RoundedCornerShape(12.dp)) {
@@ -312,7 +349,7 @@ fun MiniPlayer(theme: DxTheme, title: String, isPlaying: Boolean, onPlayPause: (
 @Composable
 fun PlayerScreen(
     theme: DxTheme,
-    player: ExoPlayer,
+    player: Player, // <-- ТЕПЕРЬ Player ВМЕСТО ExoPlayer
     metadata: AudioMetadata?,
     lyrics: List<LyricLine>,
     autoShowLyrics: Boolean,
@@ -330,11 +367,12 @@ fun PlayerScreen(
     var sliderPosition by remember { mutableStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
     
-    // Визуализатор (плавный)
+    // Получаем sessionId из сервиса
+    val audioSessionId by PlayerHolder.audioSessionId.collectAsState()
+
     var targetData by remember { mutableStateOf(FloatArray(64) { 0f }) }
     var smoothData by remember { mutableStateOf(FloatArray(64) { 0f }) }
     var visualizer by remember { mutableStateOf<Visualizer?>(null) }
-    val audioSessionId = player.audioSessionId
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -353,14 +391,13 @@ fun PlayerScreen(
         }
     }
 
-    // Плавная интерполяция визуализатора (60 FPS)
     LaunchedEffect(Unit) {
         while (true) {
             smoothData = FloatArray(64) { i -> 
                 val target = if (i < targetData.size) targetData[i] else 0f
-                smoothData[i] + (target - smoothData[i]) * 0.2f // Коэффициент плавности
+                smoothData[i] + (target - smoothData[i]) * 0.2f
             }
-            delay(16) // ~60 FPS
+            delay(16)
         }
     }
 
@@ -415,7 +452,7 @@ fun PlayerScreen(
 
     val gradient = Brush.verticalGradient(colors = listOf(theme.primary.copy(alpha = 0.15f), theme.background))
     val vizColor = when (visualizerColor) {
-        "Радуга" -> Color.hsv((sliderPosition / 1000) % 360f, 1f, 1f) // Меняет цвет
+        "Радуга" -> Color.hsv((sliderPosition / 1000) % 360f, 1f, 1f)
         "Белый" -> Color.White
         else -> theme.primary
     }
@@ -424,7 +461,6 @@ fun PlayerScreen(
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = theme.onSurface) }
             Text(if (showLyrics) "Текст песни" else "Сейчас играет", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), color = theme.onSurface)
-            
             if (lyrics.isNotEmpty()) {
                 IconButton(onClick = { showLyrics = !showLyrics }) {
                     Icon(if (showLyrics) Icons.Default.MusicNote else Icons.Default.Subject, contentDescription = "Текст", tint = theme.onSurface)
