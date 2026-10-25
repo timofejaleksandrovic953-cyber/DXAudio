@@ -39,6 +39,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -51,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.documentfile.provider.DocumentFile
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -66,6 +68,7 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 data class LyricLine(val timeMs: Long, val text: String)
+data class AudioMetadata(val title: String, val artist: String, val album: String, val bitmap: Bitmap?)
 
 sealed class Screen {
     object Files : Screen()
@@ -88,18 +91,17 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             val repo = remember { ThemeRepository(context) }
-            val prefs = remember { context.getSharedPreferences("dx_prefs", android.content.Context.MODE_PRIVATE) }
+            val prefs = remember { context.getSharedPreferences("dx_prefs", Context.MODE_PRIVATE) }
             
             var currentTheme by remember { mutableStateOf(repo.getSavedTheme()) }
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Files) }
             
             var autoShowLyrics by remember { mutableStateOf(prefs.getBoolean("auto_lyrics", false)) }
             var visualizerStyle by remember { mutableStateOf(prefs.getString("viz_style", "Волна") ?: "Волна") }
+            var visualizerColor by remember { mutableStateOf(prefs.getString("viz_color", "Цвет темы") ?: "Цвет темы") }
             
-            var currentTrackTitle by remember { mutableStateOf("Ничего не играет") }
-            var currentAudioUri by remember { mutableStateOf<Uri?>(null) }
+            var currentMetadata by remember { mutableStateOf<AudioMetadata?>(null) }
             var currentLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
-            var currentAlbumArt by remember { mutableStateOf<Bitmap?>(null) }
             var isPlaying by remember { mutableStateOf(false) }
 
             val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
@@ -123,11 +125,9 @@ class MainActivity : ComponentActivity() {
                     exoPlayer.setMediaItem(MediaItem.fromUri(uri))
                     exoPlayer.prepare()
                     exoPlayer.play()
-                    currentTrackTitle = "Аудиофайл"
-                    currentAudioUri = uri
                     withContext(Dispatchers.IO) {
-                        currentLyrics = loadLyrics(uri)
-                        currentAlbumArt = loadAlbumArt(context, uri)
+                        currentLyrics = loadLyrics(context, uri)
+                        currentMetadata = loadMetadata(context, uri)
                     }
                     currentScreen = Screen.Player
                     externalAudioUri = null
@@ -143,10 +143,8 @@ class MainActivity : ComponentActivity() {
                                 exoPlayer.setMediaItems(mediaItems)
                                 exoPlayer.prepare()
                                 exoPlayer.play()
-                                currentTrackTitle = "Плейлист"
-                                currentAudioUri = null
                                 currentLyrics = emptyList()
-                                currentAlbumArt = null
+                                currentMetadata = AudioMetadata("Плейлист", "", "", null)
                                 currentScreen = Screen.Player
                             }
                         }
@@ -158,10 +156,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(externalThemeUri) {
                 externalThemeUri?.let { uri ->
                     val theme = repo.importTheme(uri)
-                    if (theme != null) {
-                        currentTheme = theme
-                        repo.saveThemeId(theme.id)
-                    }
+                    if (theme != null) { currentTheme = theme; repo.saveThemeId(theme.id) }
                     externalThemeUri = null
                 }
             }
@@ -172,8 +167,8 @@ class MainActivity : ComponentActivity() {
                         bottomBar = {
                             if (currentScreen != Screen.Player) {
                                 Column {
-                                    if (currentTrackTitle != "Ничего не играет") {
-                                        MiniPlayer(currentTheme, currentTrackTitle, isPlaying, { if (isPlaying) exoPlayer.pause() else exoPlayer.play() }, { currentScreen = Screen.Player })
+                                    if (currentMetadata != null) {
+                                        MiniPlayer(currentTheme, currentMetadata!!.title, isPlaying, { if (isPlaying) exoPlayer.pause() else exoPlayer.play() }, { currentScreen = Screen.Player })
                                     }
                                     NavigationBar(containerColor = currentTheme.surface) {
                                         NavigationBarItem(selected = currentScreen == Screen.Files, onClick = { currentScreen = Screen.Files }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Файлы") }, colors = navColors(currentTheme))
@@ -190,13 +185,15 @@ class MainActivity : ComponentActivity() {
                                     onPlayAudio = { uri, _ -> externalAudioUri = uri },
                                     onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri }
                                 )
-                                Screen.Playlists -> PlaylistsScreen(onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri })
+                                Screen.Playlists -> PlaylistsScreen(onPlayAudio = { uri, _ -> externalAudioUri = uri })
                                 Screen.Settings -> SettingsScreen(
                                     onOpenThemes = { currentScreen = Screen.Themes },
                                     autoShowLyrics = autoShowLyrics,
                                     onAutoShowLyricsChange = { autoShowLyrics = it; prefs.edit().putBoolean("auto_lyrics", it).apply() },
                                     visualizerStyle = visualizerStyle,
-                                    onVisualizerStyleChange = { visualizerStyle = it; prefs.edit().putString("viz_style", it).apply() }
+                                    onVisualizerStyleChange = { visualizerStyle = it; prefs.edit().putString("viz_style", it).apply() },
+                                    visualizerColor = visualizerColor,
+                                    onVisualizerColorChange = { visualizerColor = it; prefs.edit().putString("viz_color", it).apply() }
                                 )
                                 Screen.Themes -> ThemePickerScreen(
                                     current = currentTheme,
@@ -206,12 +203,11 @@ class MainActivity : ComponentActivity() {
                                 Screen.Player -> PlayerScreen(
                                     theme = currentTheme,
                                     player = exoPlayer,
-                                    title = currentTrackTitle,
+                                    metadata = currentMetadata,
                                     lyrics = currentLyrics,
-                                    albumArt = currentAlbumArt,
-                                    currentUri = currentAudioUri,
                                     autoShowLyrics = autoShowLyrics,
                                     visualizerStyle = visualizerStyle,
+                                    visualizerColor = visualizerColor,
                                     onBack = { currentScreen = Screen.Files }
                                 )
                             }
@@ -229,36 +225,45 @@ class MainActivity : ComponentActivity() {
         unselectedTextColor = theme.onSurface.copy(alpha = 0.6f)
     )
 
-    private fun loadAlbumArt(context: Context, uri: Uri): Bitmap? {
-        val retriever = MediaMetadataRetriever()
+    // ИСПРАВЛЕНИЕ SAF: Ищем .lrc через DocumentFile
+    private fun loadLyrics(context: Context, audioUri: Uri): List<LyricLine> {
         return try {
-            retriever.setDataSource(context, uri)
-            val art = retriever.embeddedPicture
-            art?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
-        } catch (e: Exception) { null } finally { retriever.release() }
-    }
+            val doc = DocumentFile.fromSingleUri(context, audioUri) ?: return emptyList()
+            val parent = doc.parentFile ?: return emptyList()
+            val baseName = doc.name?.substringBeforeLast(".") ?: return emptyList()
+            val lrcDoc = parent.findFile("$baseName.lrc") ?: return emptyList()
 
-    private fun loadLyrics(audioUri: Uri): List<LyricLine> {
-        return try {
-            val path = audioUri.path ?: return emptyList()
-            val lrcFile = File(path.substringBeforeLast(".") + ".lrc")
-            if (!lrcFile.exists()) return emptyList()
             val lyrics = mutableListOf<LyricLine>()
             val regex = Regex("\\[(\\d{2}):(\\d{2}\\.\\d{2})](.*)")
-            lrcFile.forEachLine { line ->
-                val match = regex.find(line)
-                if (match != null) {
-                    val min = match.groupValues[1].toLong()
-                    val sec = match.groupValues[2].toDouble()
-                    val text = match.groupValues[3].trim()
-                    if (text.isNotEmpty()) {
-                        val timeMs = (min * 60 * 1000) + (sec * 1000).toLong()
-                        lyrics.add(LyricLine(timeMs, text))
+            context.contentResolver.openInputStream(lrcDoc.uri)?.bufferedReader()?.useLines { lines ->
+                lines.forEach { line ->
+                    val match = regex.find(line)
+                    if (match != null) {
+                        val min = match.groupValues[1].toLong()
+                        val sec = match.groupValues[2].toDouble()
+                        val text = match.groupValues[3].trim()
+                        if (text.isNotEmpty()) {
+                            lyrics.add(LyricLine((min * 60 * 1000) + (sec * 1000).toLong(), text))
+                        }
                     }
                 }
             }
             lyrics.sortedBy { it.timeMs }
         } catch (e: Exception) { emptyList() }
+    }
+
+    private fun loadMetadata(context: Context, uri: Uri): AudioMetadata {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: "Неизвестно"
+            val artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "Неизвестный исполнитель"
+            val album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: "Неизвестный альбом"
+            val art = retriever.embeddedPicture
+            AudioMetadata(title, artist, album, art?.let { BitmapFactory.decodeByteArray(it, 0, it.size) })
+        } catch (e: Exception) {
+            AudioMetadata(uri.lastPathSegment ?: "Трек", "", "", null)
+        } finally { retriever.release() }
     }
 
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handleIntent(intent) }
@@ -308,12 +313,11 @@ fun MiniPlayer(theme: DxTheme, title: String, isPlaying: Boolean, onPlayPause: (
 fun PlayerScreen(
     theme: DxTheme,
     player: ExoPlayer,
-    title: String,
+    metadata: AudioMetadata?,
     lyrics: List<LyricLine>,
-    albumArt: Bitmap?,
-    currentUri: Uri?,
     autoShowLyrics: Boolean,
     visualizerStyle: String,
+    visualizerColor: String,
     onBack: () -> Unit
 ) {
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
@@ -325,36 +329,12 @@ fun PlayerScreen(
 
     var sliderPosition by remember { mutableStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
-    var visualizerData by remember { mutableStateOf(FloatArray(64) { 0f }) }
+    
+    // Визуализатор (плавный)
+    var targetData by remember { mutableStateOf(FloatArray(64) { 0f }) }
+    var smoothData by remember { mutableStateOf(FloatArray(64) { 0f }) }
     var visualizer by remember { mutableStateOf<Visualizer?>(null) }
     val audioSessionId = player.audioSessionId
-
-    var showAddToPlaylistDialog by remember { mutableStateOf(false) }
-    var playlists by remember { mutableStateOf<List<File>>(emptyList()) }
-    
-    if (showAddToPlaylistDialog) {
-        val playlistsDir = File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "playlists").apply { mkdirs() }
-        playlists = playlistsDir.listFiles { f -> f.name.endsWith(".m3u") }?.toList() ?: emptyList()
-        
-        AlertDialog(
-            onDismissRequest = { showAddToPlaylistDialog = false },
-            title = { Text("Добавить в плейлист") },
-            text = {
-                if (playlists.isEmpty()) Text("Нет созданных плейлистов. Создайте их во вкладке Плейлисты.")
-                else LazyColumn {
-                    items(playlists) { file ->
-                        Text(file.nameWithoutExtension, modifier = Modifier.fillMaxWidth().clickable {
-                            if (currentUri != null) {
-                                file.appendText("${currentUri}\n")
-                            }
-                            showAddToPlaylistDialog = false
-                        }.padding(12.dp))
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showAddToPlaylistDialog = false }) { Text("Закрыть") } }
-        )
-    }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -373,6 +353,17 @@ fun PlayerScreen(
         }
     }
 
+    // Плавная интерполяция визуализатора (60 FPS)
+    LaunchedEffect(Unit) {
+        while (true) {
+            smoothData = FloatArray(64) { i -> 
+                val target = if (i < targetData.size) targetData[i] else 0f
+                smoothData[i] + (target - smoothData[i]) * 0.2f // Коэффициент плавности
+            }
+            delay(16) // ~60 FPS
+        }
+    }
+
     LaunchedEffect(sliderPosition, showLyrics) {
         if (showLyrics && lyrics.isNotEmpty()) {
             val currentLineIndex = lyrics.indexOfLast { it.timeMs <= sliderPosition.toLong() }
@@ -385,32 +376,21 @@ fun PlayerScreen(
             try {
                 val vis = Visualizer(audioSessionId)
                 vis.captureSize = Visualizer.getCaptureSizeRange()[1]
-                var lastUpdateTime = 0L
                 vis.setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
                     override fun onWaveFormDataCapture(v: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
                         if (visualizerStyle == "Волна" && waveform != null) {
-                            val now = System.currentTimeMillis()
-                            if (now - lastUpdateTime > 33) {
-                                lastUpdateTime = now
-                                visualizerData = FloatArray(waveform.size / 8) { i -> abs(waveform[i * 8].toInt()) / 128f }
-                            }
+                            targetData = FloatArray(waveform.size / 8) { i -> abs(waveform[i * 8].toInt()) / 128f }
                         }
                     }
                     override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, samplingRate: Int) {
                         if (visualizerStyle == "Спектр (Cava)" && fft != null) {
-                            val now = System.currentTimeMillis()
-                            if (now - lastUpdateTime > 33) {
-                                lastUpdateTime = now
-                                visualizerData = FloatArray(32) { i ->
-                                    val real = fft[i * 2].toFloat()
-                                    val imag = fft[i * 2 + 1].toFloat()
-                                    val magnitude = sqrt(real * real + imag * imag) / 128f
-                                    magnitude.coerceIn(0f, 1f)
-                                }
+                            targetData = FloatArray(32) { i ->
+                                val real = fft[i * 2].toFloat(); val imag = fft[i * 2 + 1].toFloat()
+                                (sqrt(real * real + imag * imag) / 128f).coerceIn(0f, 1f)
                             }
                         }
                     }
-                }, Visualizer.getMaxCaptureRate() / 2, true, true)
+                }, Visualizer.getMaxCaptureRate(), true, true)
                 vis.enabled = true
                 visualizer = vis
             } catch (e: Exception) { e.printStackTrace() }
@@ -418,7 +398,6 @@ fun PlayerScreen(
         onDispose { visualizer?.enabled = false; visualizer?.release(); visualizer = null }
     }
 
-    // --- ЖЕСТЫ ---
     var accumulatedDrag by remember { mutableStateOf(Offset.Zero) }
     val gestureModifier = Modifier.pointerInput(Unit) {
         detectDragGestures(
@@ -435,17 +414,16 @@ fun PlayerScreen(
     }
 
     val gradient = Brush.verticalGradient(colors = listOf(theme.primary.copy(alpha = 0.15f), theme.background))
+    val vizColor = when (visualizerColor) {
+        "Радуга" -> Color.hsv((sliderPosition / 1000) % 360f, 1f, 1f) // Меняет цвет
+        "Белый" -> Color.White
+        else -> theme.primary
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(gradient).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = theme.onSurface) }
             Text(if (showLyrics) "Текст песни" else "Сейчас играет", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), color = theme.onSurface)
-            
-            if (currentUri != null) {
-                IconButton(onClick = { showAddToPlaylistDialog = true }) {
-                    Icon(Icons.Default.PlaylistAdd, contentDescription = "В плейлист", tint = theme.onSurface)
-                }
-            }
             
             if (lyrics.isNotEmpty()) {
                 IconButton(onClick = { showLyrics = !showLyrics }) {
@@ -465,38 +443,36 @@ fun PlayerScreen(
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Surface(modifier = Modifier.size(260.dp).shadow(12.dp, RoundedCornerShape(16.dp)), shape = RoundedCornerShape(16.dp), color = theme.surface) {
-                        if (albumArt != null) {
-                            Image(bitmap = albumArt.asImageBitmap(), contentDescription = "Обложка", modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)), contentScale = ContentScale.Crop)
+                        if (metadata?.bitmap != null) {
+                            Image(bitmap = metadata.bitmap.asImageBitmap(), contentDescription = "Обложка", modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)), contentScale = ContentScale.Crop)
                         } else {
                             Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(120.dp), tint = theme.primary) }
                         }
                     }
-                    Spacer(modifier = Modifier.height(32.dp))
-                    Text(text = title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis, color = theme.onSurface)
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Text(text = metadata?.title ?: "Неизвестно", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis, color = theme.onSurface)
+                    Text(text = "${metadata?.artist} • ${metadata?.album}", style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis, color = theme.onSurface.copy(alpha = 0.7f))
                 }
             }
         }
 
         if (visualizerStyle != "Отключен") {
             Canvas(modifier = Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 16.dp)) {
-                if (visualizerData.isNotEmpty()) {
-                    val width = size.width
-                    val height = size.height
-                    val centerY = height / 2
+                if (smoothData.isNotEmpty()) {
+                    val width = size.width; val height = size.height; val centerY = height / 2
                     if (visualizerStyle == "Волна") {
                         val path = Path()
-                        val step = width / (visualizerData.size - 1).coerceAtLeast(1)
+                        val step = width / (smoothData.size - 1).coerceAtLeast(1)
                         path.moveTo(0f, centerY)
-                        visualizerData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); if (index == 0) path.moveTo(x, y) else path.lineTo(x, y) }
+                        smoothData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); if (index == 0) path.moveTo(x, y) else path.lineTo(x, y) }
                         path.lineTo(width, centerY); path.lineTo(0f, centerY); path.close()
-                        drawPath(path = path, color = theme.primary.copy(alpha = 0.8f))
-                        drawPath(path = path, color = theme.primary, style = Stroke(width = 2.dp.toPx()))
+                        drawPath(path = path, color = vizColor.copy(alpha = 0.8f))
+                        drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
                     } else if (visualizerStyle == "Спектр (Cava)") {
-                        val barWidth = width / (visualizerData.size * 2)
-                        visualizerData.forEachIndexed { index, value ->
-                            val barHeight = value * height
-                            val x = index * barWidth * 2
-                            drawRoundRect(color = theme.primary, topLeft = Offset(x, centerY - barHeight / 2), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(4f, 4f))
+                        val barWidth = width / (smoothData.size * 2)
+                        smoothData.forEachIndexed { index, value ->
+                            val barHeight = value * height; val x = index * barWidth * 2
+                            drawRoundRect(color = vizColor, topLeft = Offset(x, centerY - barHeight / 2), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(4f, 4f))
                         }
                     }
                 }
@@ -543,7 +519,5 @@ fun PlayerScreen(
 fun formatTime(ms: Long): String {
     if (ms <= 0) return "0:00"
     val totalSeconds = ms / 1000
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    return "%d:%02d".format(minutes, seconds)
+    return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
