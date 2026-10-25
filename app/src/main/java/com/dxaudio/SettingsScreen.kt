@@ -21,24 +21,23 @@ fun SettingsScreen(
     autoShowLyrics: Boolean,
     onAutoShowLyricsChange: (Boolean) -> Unit,
     visualizerStyle: String,
-    onVisualizerStyleChange: (String) -> Unit
+    onVisualizerStyleChange: (String) -> Unit,
+    visualizerColor: String,
+    onVisualizerColorChange: (String) -> Unit
 ) {
     val context = LocalContext.current
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var cacheClearedText by remember { mutableStateOf("Очистить кэш") }
     var showVisualizerDialog by remember { mutableStateOf(false) }
+    var showVizColorDialog by remember { mutableStateOf(false) }
 
     if (showClearCacheDialog) {
         AlertDialog(
             onDismissRequest = { showClearCacheDialog = false },
             title = { Text("Очистка кэша") },
-            text = { Text("Удалить временные файлы и кэш? Ваши темы и музыка останутся на месте.") },
+            text = { Text("Удалить временные файлы и кэш?") },
             confirmButton = {
-                TextButton(onClick = {
-                    context.cacheDir.deleteRecursively()
-                    cacheClearedText = "Кэш очищен!"
-                    showClearCacheDialog = false
-                }) { Text("Очистить") }
+                TextButton(onClick = { context.cacheDir.deleteRecursively(); cacheClearedText = "Кэш очищен!"; showClearCacheDialog = false }) { Text("Очистить") }
             },
             dismissButton = { TextButton(onClick = { showClearCacheDialog = false }) { Text("Отмена") } }
         )
@@ -47,21 +46,31 @@ fun SettingsScreen(
     if (showVisualizerDialog) {
         AlertDialog(
             onDismissRequest = { showVisualizerDialog = false },
-            title = { Text("Визуализатор") },
+            title = { Text("Стиль визуализатора") },
             text = {
                 Column {
                     listOf("Отключен", "Волна", "Спектр (Cava)").forEach { style ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable { 
-                                onVisualizerStyleChange(style)
-                                showVisualizerDialog = false 
-                            }.padding(vertical = 12.dp)
-                        ) {
-                            RadioButton(selected = visualizerStyle == style, onClick = { 
-                                onVisualizerStyleChange(style)
-                                showVisualizerDialog = false 
-                            })
+                        Row(Modifier.fillMaxWidth().clickable { onVisualizerStyleChange(style); showVisualizerDialog = false }.padding(vertical = 12.dp)) {
+                            RadioButton(selected = visualizerStyle == style, onClick = { onVisualizerStyleChange(style); showVisualizerDialog = false })
                             Text(style, modifier = Modifier.padding(start = 8.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    if (showVizColorDialog) {
+        AlertDialog(
+            onDismissRequest = { showVizColorDialog = false },
+            title = { Text("Цвет визуализатора") },
+            text = {
+                Column {
+                    listOf("Цвет темы", "Радуга", "Белый").forEach { color ->
+                        Row(Modifier.fillMaxWidth().clickable { onVisualizerColorChange(color); showVizColorDialog = false }.padding(vertical = 12.dp)) {
+                            RadioButton(selected = visualizerColor == color, onClick = { onVisualizerColorChange(color); showVizColorDialog = false })
+                            Text(color, modifier = Modifier.padding(start = 8.dp))
                         }
                     }
                 }
@@ -90,12 +99,18 @@ fun SettingsScreen(
             trailingContent = { Switch(checked = autoShowLyrics, onCheckedChange = onAutoShowLyricsChange) }
         )
         HorizontalDivider()
-        
         ListItem(
-            headlineContent = { Text("Визуализатор") },
+            headlineContent = { Text("Стиль визуализатора") },
             supportingContent = { Text(visualizerStyle) },
             leadingContent = { Icon(Icons.Default.GraphicEq, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
             modifier = Modifier.clickable { showVisualizerDialog = true }
+        )
+        HorizontalDivider()
+        ListItem(
+            headlineContent = { Text("Цвет визуализатора") },
+            supportingContent = { Text(visualizerColor) },
+            leadingContent = { Icon(Icons.Default.Palette, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            modifier = Modifier.clickable { showVizColorDialog = true }
         )
         HorizontalDivider()
 
@@ -109,7 +124,7 @@ fun SettingsScreen(
         HorizontalDivider()
         ListItem(
             headlineContent = { Text("О приложении") },
-            supportingContent = { Text("DXAudio v1.2.0\nСделано на GitHub Actions") },
+            supportingContent = { Text("DXAudio v1.3.0") },
             leadingContent = { Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
         )
     }
