@@ -64,8 +64,10 @@ import com.dxaudio.theme.DxThemeProvider
 import com.dxaudio.theme.ThemeRepository
 import com.dxaudio.ui.ThemePickerScreen
 import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.abs
@@ -142,9 +144,14 @@ class MainActivity : ComponentActivity() {
                         // Обновляем метаданные при смене трека в плейлисте
                         mediaItem?.mediaId?.let { uriStr ->
                             val uri = Uri.parse(uriStr)
-                            withContext(Dispatchers.IO) {
-                                currentLyrics = loadLyrics(context, uri)
-                                currentMetadata = loadMetadata(context, uri)
+                            // Запускаем корутину вне слушателя
+                            CoroutineScope(Dispatchers.IO).launch {
+                                val lyrics = loadLyrics(context, uri)
+                                val meta = loadMetadata(context, uri)
+                                withContext(Dispatchers.Main) {
+                                    currentLyrics = lyrics
+                                    currentMetadata = meta
+                                }
                             }
                         }
                     }
@@ -262,20 +269,24 @@ class MainActivity : ComponentActivity() {
     )
 
     private fun loadLyrics(context: Context, audioUri: Uri): List<LyricLine> {
-        // Код остается прежним (SAF)
         return try {
             val doc = DocumentFile.fromSingleUri(context, audioUri) ?: return emptyList()
             val parent = doc.parentFile ?: return emptyList()
             val baseName = doc.name?.substringBeforeLast(".") ?: return emptyList()
             val lrcDoc = parent.findFile("$baseName.lrc") ?: return emptyList()
+
             val lyrics = mutableListOf<LyricLine>()
             val regex = Regex("\\[(\\d{2}):(\\d{2}\\.\\d{2})](.*)")
             context.contentResolver.openInputStream(lrcDoc.uri)?.bufferedReader()?.useLines { lines ->
                 lines.forEach { line ->
                     val match = regex.find(line)
                     if (match != null) {
-                        val min = match.groupValues[1].toLong(); val sec = match.groupValues[2].toDouble(); val text = match.groupValues[3].trim()
-                        if (text.isNotEmpty()) lyrics.add(LyricLine((min * 60 * 1000) + (sec * 1000).toLong(), text))
+                        val min = match.groupValues[1].toLong()
+                        val sec = match.groupValues[2].toDouble()
+                        val text = match.groupValues[3].trim()
+                        if (text.isNotEmpty()) {
+                            lyrics.add(LyricLine((min * 60 * 1000) + (sec * 1000).toLong(), text))
+                        }
                     }
                 }
             }
@@ -284,7 +295,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadMetadata(context: Context, uri: Uri): AudioMetadata {
-        // Код остается прежним
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(context, uri)
@@ -333,7 +343,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// MiniPlayer и остальные Compose-функции остаются почти без изменений, меняем ExoPlayer на Player.
 @Composable
 fun MiniPlayer(theme: DxTheme, title: String, isPlaying: Boolean, onPlayPause: () -> Unit, onClick: () -> Unit) {
     Surface(color = theme.surface, modifier = Modifier.fillMaxWidth().padding(8.dp).shadow(4.dp, RoundedCornerShape(12.dp)).clickable { onClick() }, shape = RoundedCornerShape(12.dp)) {
@@ -349,7 +358,7 @@ fun MiniPlayer(theme: DxTheme, title: String, isPlaying: Boolean, onPlayPause: (
 @Composable
 fun PlayerScreen(
     theme: DxTheme,
-    player: Player, // <-- ТЕПЕРЬ Player ВМЕСТО ExoPlayer
+    player: Player,
     metadata: AudioMetadata?,
     lyrics: List<LyricLine>,
     autoShowLyrics: Boolean,
@@ -422,7 +431,8 @@ fun PlayerScreen(
                     override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, samplingRate: Int) {
                         if (visualizerStyle == "Спектр (Cava)" && fft != null) {
                             targetData = FloatArray(32) { i ->
-                                val real = fft[i * 2].toFloat(); val imag = fft[i * 2 + 1].toFloat()
+                                val real = fft[i * 2].toFloat()
+                                val imag = fft[i * 2 + 1].toFloat()
                                 (sqrt(real * real + imag * imag) / 128f).coerceIn(0f, 1f)
                             }
                         }
@@ -461,6 +471,7 @@ fun PlayerScreen(
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = theme.onSurface) }
             Text(if (showLyrics) "Текст песни" else "Сейчас играет", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), color = theme.onSurface)
+            
             if (lyrics.isNotEmpty()) {
                 IconButton(onClick = { showLyrics = !showLyrics }) {
                     Icon(if (showLyrics) Icons.Default.MusicNote else Icons.Default.Subject, contentDescription = "Текст", tint = theme.onSurface)
