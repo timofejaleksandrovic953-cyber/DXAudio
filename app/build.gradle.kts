@@ -12,8 +12,8 @@ android {
         applicationId = "com.dxaudio"
         minSdk = 23
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
+        versionName = System.getenv("VERSION_NAME") ?: "1.0.0"
     }
 
     buildTypes {
