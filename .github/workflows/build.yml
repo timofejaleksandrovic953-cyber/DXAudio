@@ -39,6 +39,7 @@ jobs:
 
     - name: 🎨 Generate App Icons
       run: |
+        sudo apt-get update -qq && sudo apt-get install imagemagick -y -qq
         ICON_SRC="src/icon.png"
         RES_DIR="app/src/main/res"
 
