@@ -8,6 +8,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,23 +22,30 @@ import java.io.File
 
 @Composable
 fun PlaylistsScreen(
-    onPlayPlaylist: (Uri, String) -> Unit
+    onPlayAudio: (Uri, String) -> Unit
 ) {
     val context = LocalContext.current
     var playlists by remember { mutableStateOf<List<File>>(emptyList()) }
+    var selectedPlaylist by remember { mutableStateOf<File?>(null) }
+    var playlistTracks by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
 
-    // Безопасная папка внутри приложения
-    val playlistsDir = remember { 
-        File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "playlists").apply { mkdirs() } 
-    }
+    val playlistsDir = remember { File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "playlists").apply { mkdirs() } }
 
     fun refreshPlaylists() {
         playlists = playlistsDir.listFiles { file -> file.name.endsWith(".m3u", true) }?.toList() ?: emptyList()
     }
 
     LaunchedEffect(Unit) { refreshPlaylists() }
+
+    LaunchedEffect(selectedPlaylist) {
+        selectedPlaylist?.let { file ->
+            playlistTracks = file.readLines()
+                .filter { it.isNotBlank() && !it.startsWith("#") }
+                .map { Uri.parse(it.trim()) }
+        } ?: run { playlistTracks = emptyList() }
+    }
 
     if (showCreateDialog) {
         AlertDialog(
@@ -46,8 +55,7 @@ fun PlaylistsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     if (newPlaylistName.isNotBlank()) {
-                        val file = File(playlistsDir, "${newPlaylistName}.m3u")
-                        file.writeText("#EXTM3U\n")
+                        File(playlistsDir, "${newPlaylistName}.m3u").writeText("#EXTM3U\n")
                         refreshPlaylists()
                     }
                     showCreateDialog = false
@@ -59,35 +67,48 @@ fun PlaylistsScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Плейлисты", style = MaterialTheme.typography.titleLarge)
-            Button(onClick = { showCreateDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Создать")
+        if (selectedPlaylist == null) {
+            // Список плейлистов
+            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Плейлисты", style = MaterialTheme.typography.titleLarge)
+                Button(onClick = { showCreateDialog = true }) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Создать")
+                }
             }
-        }
-
-        if (playlists.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Плейлистов пока нет")
+            if (playlists.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Нет плейлистов") }
+            } else {
+                LazyColumn {
+                    items(playlists) { file ->
+                        Row(Modifier.fillMaxWidth().clickable { selectedPlaylist = file }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.PlaylistPlay, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(12.dp))
+                            Text(file.nameWithoutExtension, style = MaterialTheme.typography.bodyLarge)
+                        }
+                        HorizontalDivider()
+                    }
+                }
             }
         } else {
-            LazyColumn {
-                items(playlists) { file ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable { onPlayPlaylist(Uri.fromFile(file), file.name) }.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.PlaylistPlay, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.width(12.dp))
-                        Text(file.nameWithoutExtension, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // Треки внутри плейлиста
+            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { selectedPlaylist = null }) { Icon(Icons.Default.ArrowBack, contentDescription = "Назад") }
+                Text(selectedPlaylist!!.nameWithoutExtension, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (playlistTracks.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Плейлист пуст") }
+            } else {
+                LazyColumn {
+                    items(playlistTracks) { uri ->
+                        Row(Modifier.fillMaxWidth().clickable { onPlayAudio(uri, uri.lastPathSegment ?: "Трек") }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                            Spacer(Modifier.width(12.dp))
+                            Text(uri.lastPathSegment ?: "Неизвестный трек", style = MaterialTheme.typography.bodyLarge)
+                        }
+                        HorizontalDivider()
                     }
-                    HorizontalDivider()
                 }
             }
         }
