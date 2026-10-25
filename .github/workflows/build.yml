@@ -1,11 +1,12 @@
 name: Build DXAudio APK
 
 on:
-  workflow_dispatch: # Позволяет запускать сборку вручную из вкладки Actions
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - name: Checkout repository
@@ -20,29 +21,61 @@ jobs:
 
     - name: Set up Android SDK
       uses: android-actions/setup-android@v3
-      with:
-        packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
 
-    - name: Set up Gradle
+    - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
       with:
-        gradle-version: '8.11.1' # Указываем версию, которая будет использоваться для генерации wrapper'а
+        gradle-version: '8.11.1'
 
     - name: Bootstrap Gradle Wrapper
-      working-directory: .
       run: |
         if [ ! -f ./gradlew ]; then
-          echo "gradlew not found, generating Gradle Wrapper..."
-          gradle wrapper --gradle-version 8.11.1 --no-daemon --quiet
+          gradle wrapper --gradle-version 8.11.1 --no-daemon
         fi
         chmod +x ./gradlew
-      # Этот шаг проверяет наличие gradlew. Если его нет, он генерирует его с помощью установленного Gradle 8.5.
-      # После этого делает файл исполняемым, чтобы избежать ошибки "Permission denied".
 
-    - name: Build Debug APK
-      run: ./gradlew assembleDebug --no-daemon --quiet
+    - name: 🎨 Generate App Icons
+      run: |
+        ICON_SRC="src/icon.png"
+        RES_DIR="app/src/main/res"
 
-    - name: Upload APK Artifact
+        # Если иконки нет — создаем временный плейсхолдер, чтобы сборка не упала
+        if [ ! -f "$ICON_SRC" ]; then
+          echo "⚠️ Icon not found at $ICON_SRC. Generating purple placeholder..."
+          mkdir -p src
+          convert -size 512x512 xc:"#BB86FC" "$ICON_SRC"
+        fi
+
+        echo "🎨 Resizing $ICON_SRC into all Android densities..."
+
+        # Автоопределение команды ImageMagick (в новых версиях это magick, в старых - convert)
+        if command -v magick &> /dev/null; then
+          IM_CMD="magick"
+        else
+          IM_CMD="convert"
+        fi
+
+        make_icon() {
+          DENSITY=$1
+          SIZE=$2
+          mkdir -p "$RES_DIR/mipmap-$DENSITY"
+          $IM_CMD "$ICON_SRC" -resize ${SIZE}x${SIZE} "$RES_DIR/mipmap-$DENSITY/ic_launcher.png"
+          cp "$RES_DIR/mipmap-$DENSITY/ic_launcher.png" "$RES_DIR/mipmap-$DENSITY/ic_launcher_round.png"
+          echo "  ✅ mipmap-$DENSITY ($SIZE x $SIZE)"
+        }
+
+        make_icon "mdpi"    48
+        make_icon "hdpi"    72
+        make_icon "xhdpi"   96
+        make_icon "xxhdpi"  144
+        make_icon "xxxhdpi" 192
+
+        echo "🎉 Icons are ready!"
+
+    - name: 🏗️ Build Debug APK
+      run: ./gradlew assembleDebug --no-daemon --console=plain --quiet
+
+    - name: 📦 Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: DXAudio-debug-apk
