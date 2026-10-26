@@ -1,0 +1,25 @@
+name: Generate Keystore
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore release.jks \
+            -alias dxaudio \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass "FF&92gV3" \
+            -keypass "FF&92gV3" \
+            -dname "CN=DXAudio, OU=Dev, O=DXAudio, L=Moscow, S=Moscow, C=RU"
+          
+          echo "--- СКОПИРУЙ ВСЁ, ЧТО НИЖЕ (одной строкой) ---"
+          base64 -w 0 release.jks
+          echo ""
+          echo "--- КОНЕЦ BASE64 СТРОКИ ---"
