@@ -67,7 +67,7 @@ dependencies {
     implementation("androidx.media3:media3-ui-compose-material3:$media3Version")
 
     // Расширенные кодеки через NextLib (GPL-3.0)
-    implementation("io.github.anbeesetti:nextlib-media3ext:1.11.1-0.16.0")
+    implementation("io.github.anilbeesetti:nextlib-media3ext:1.11.1-0.16.0")
 
     // Jetpack Compose
     implementation(platform("androidx.compose:compose-bom:2023.10.01"))
