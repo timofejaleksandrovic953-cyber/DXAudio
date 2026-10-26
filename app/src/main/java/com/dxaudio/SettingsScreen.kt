@@ -3,11 +3,7 @@ package com.dxaudio
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Subject
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -30,6 +26,19 @@ fun SettingsScreen(
     var cacheClearedText by remember { mutableStateOf("Очистить кэш") }
     var showVisualizerDialog by remember { mutableStateOf(false) }
     var showVizColorDialog by remember { mutableStateOf(false) }
+    
+    // Пасхалка
+    var clickCount by remember { mutableIntStateOf(0) }
+    var showEasterEgg by remember { mutableStateOf(false) }
+
+    if (showEasterEgg) {
+        AlertDialog(
+            onDismissRequest = { showEasterEgg = false },
+            title = { Text("🎉 Пасхалка разблокирована!") },
+            text = { Text("Ты нашел секретное сообщение!\n\nЭтот плеер был собран с любовью, нейросетями и большим количеством кофе. Vibe-coding forever! 🚀\n\nА еще у нас есть 6 визуализаторов. Выбери свой в настройках!") },
+            confirmButton = { TextButton(onClick = { showEasterEgg = false }) { Text("Круто!") } }
+        )
+    }
 
     if (showClearCacheDialog) {
         AlertDialog(
@@ -49,8 +58,8 @@ fun SettingsScreen(
             title = { Text("Стиль визуализатора") },
             text = {
                 Column {
-                    listOf("Отключен", "Волна", "Спектр (Cava)").forEach { style ->
-                        Row(Modifier.fillMaxWidth().clickable { onVisualizerStyleChange(style); showVisualizerDialog = false }.padding(vertical = 12.dp)) {
+                    listOf("Отключен", "Волна", "Спектр (Cava)", "Круг", "Зеркальные бары", "Заполненная волна", "Точки").forEach { style ->
+                        Row(Modifier.fillMaxWidth().clickable { onVisualizerStyleChange(style); showVisualizerDialog = false }.padding(vertical = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                             RadioButton(selected = visualizerStyle == style, onClick = { onVisualizerStyleChange(style); showVisualizerDialog = false })
                             Text(style, modifier = Modifier.padding(start = 8.dp))
                         }
@@ -68,7 +77,7 @@ fun SettingsScreen(
             text = {
                 Column {
                     listOf("Цвет темы", "Радуга", "Белый").forEach { color ->
-                        Row(Modifier.fillMaxWidth().clickable { onVisualizerColorChange(color); showVizColorDialog = false }.padding(vertical = 12.dp)) {
+                        Row(Modifier.fillMaxWidth().clickable { onVisualizerColorChange(color); showVizColorDialog = false }.padding(vertical = 12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                             RadioButton(selected = visualizerColor == color, onClick = { onVisualizerColorChange(color); showVizColorDialog = false })
                             Text(color, modifier = Modifier.padding(start = 8.dp))
                         }
@@ -124,8 +133,15 @@ fun SettingsScreen(
         HorizontalDivider()
         ListItem(
             headlineContent = { Text("О приложении") },
-            supportingContent = { Text("DXAudio v1.3.0") },
-            leadingContent = { Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+            supportingContent = { Text("DXAudio v1.3.0\nНажми 4 раза для сюрприза") },
+            leadingContent = { Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            modifier = Modifier.clickable {
+                clickCount++
+                if (clickCount >= 4) {
+                    showEasterEgg = true
+                    clickCount = 0 // Сбрасываем счетчик
+                }
+            }
         )
     }
 }
