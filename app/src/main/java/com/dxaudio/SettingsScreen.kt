@@ -31,6 +31,15 @@ fun SettingsScreen(
     var clickCount by remember { mutableIntStateOf(0) }
     var showEasterEgg by remember { mutableStateOf(false) }
 
+    // Получаем реальную версию приложения из Gradle
+    val appVersion = remember {
+        try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
+        } catch (e: Exception) {
+            "1.0.0"
+        }
+    }
+
     if (showEasterEgg) {
         AlertDialog(
             onDismissRequest = { showEasterEgg = false },
@@ -133,7 +142,8 @@ fun SettingsScreen(
         HorizontalDivider()
         ListItem(
             headlineContent = { Text("О приложении") },
-            supportingContent = { Text("DXAudio v1.3.0\nНажми 4 раза для сюрприза") },
+            // Здесь теперь подставляется реальная версия (например, 1.0.42 или 1.0.1)
+            supportingContent = { Text("DXAudio v$appVersion\nНажми 4 раза для сюрприза") },
             leadingContent = { Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
             modifier = Modifier.clickable {
                 clickCount++
