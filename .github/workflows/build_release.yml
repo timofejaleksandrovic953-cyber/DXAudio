@@ -18,6 +18,7 @@ jobs:
       with: { packages: 'platform-tools platforms;android-34 build-tools;34.0.0', accept-android-sdk-licenses: true }
     - uses: gradle/actions/setup-gradle@v4
       with: { gradle-version: '8.11.1' }
+      
     - name: 🏷️ Extract Version
       run: |
         if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
@@ -32,16 +33,29 @@ jobs:
 
     - name: 🔐 Decode Keystore
       run: |
-        echo "${{ secrets.RELEASE_KEYSTORE }}" | base64 --decode > ${{ runner.temp }}/release.jks
-        echo "KEYSTORE_FILE=${{ runner.temp }}/release.jks" >> $GITHUB_ENV
-        echo "KEYSTORE_PASSWORD=${{ secrets.RELEASE_STORE_PASSWORD }}" >> $GITHUB_ENV
-        echo "KEY_ALIAS=${{ secrets.RELEASE_KEY_ALIAS }}" >> $GITHUB_ENV
-        echo "KEY_PASSWORD=${{ secrets.RELEASE_KEY_PASSWORD }}" >> $GITHUB_ENV
+        # Достаем ключ из секретов и создаем файл
+        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/release.jks
+        
+        # Передаем путь и пароли в Gradle через переменные окружения
+        echo "KEYSTORE_FILE=app/release.jks" >> $GITHUB_ENV
+        echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
+        echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> $GITHUB_ENV
+        echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_ENV
 
     - name: 🎨 Install ImageMagick & Generate App Icons
       run: |
         sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
-        # (скрипт генерации иконок из прошлого шага)
+        ICON_SRC="src/icon.png"
+        RES_DIR="app/src/main/res"
+        if [ ! -f "$ICON_SRC" ]; then
+          mkdir -p src; convert -size 512x512 xc:"#BB86FC" "$ICON_SRC"
+        fi
+        make_icon() {
+          mkdir -p "$RES_DIR/mipmap-$1"
+          convert "$ICON_SRC" -resize ${2}x${2} "$RES_DIR/mipmap-$1/ic_launcher.png"
+          cp "$RES_DIR/mipmap-$1/ic_launcher.png" "$RES_DIR/mipmap-$1/ic_launcher_round.png"
+        }
+        make_icon "mdpi" 48; make_icon "hdpi" 72; make_icon "xhdpi" 96; make_icon "xxhdpi" 144; make_icon "xxxhdpi" 192
 
     - name: Bootstrap Gradle Wrapper
       run: |
