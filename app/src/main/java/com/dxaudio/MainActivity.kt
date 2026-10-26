@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioManager
@@ -14,6 +13,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -71,6 +73,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 data class LyricLine(val timeMs: Long, val text: String)
@@ -144,7 +148,7 @@ class MainActivity : ComponentActivity() {
                         // Обновляем метаданные при смене трека в плейлисте
                         mediaItem?.mediaId?.let { uriStr ->
                             val uri = Uri.parse(uriStr)
-                            // Запускаем корутину вне слушателя
+                            // Запускаем корутину, чтобы не блокировать слушатель
                             CoroutineScope(Dispatchers.IO).launch {
                                 val lyrics = loadLyrics(context, uri)
                                 val meta = loadMetadata(context, uri)
@@ -376,12 +380,13 @@ fun PlayerScreen(
     var sliderPosition by remember { mutableStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
     
-    // Получаем sessionId из сервиса
     val audioSessionId by PlayerHolder.audioSessionId.collectAsState()
 
     var targetData by remember { mutableStateOf(FloatArray(64) { 0f }) }
     var smoothData by remember { mutableStateOf(FloatArray(64) { 0f }) }
     var visualizer by remember { mutableStateOf<Visualizer?>(null) }
+    
+    var isVisInit by remember { mutableStateOf(false) }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -417,32 +422,56 @@ fun PlayerScreen(
         }
     }
 
+    // Инициализация визуализатора с задержкой, если sessionId == 0
     DisposableEffect(audioSessionId, visualizerStyle) {
-        if (visualizerStyle != "Отключен" && audioSessionId != 0) {
-            try {
-                val vis = Visualizer(audioSessionId)
-                vis.captureSize = Visualizer.getCaptureSizeRange()[1]
-                vis.setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
-                    override fun onWaveFormDataCapture(v: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
-                        if (visualizerStyle == "Волна" && waveform != null) {
-                            targetData = FloatArray(waveform.size / 8) { i -> abs(waveform[i * 8].toInt()) / 128f }
-                        }
-                    }
-                    override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, samplingRate: Int) {
-                        if (visualizerStyle == "Спектр (Cava)" && fft != null) {
-                            targetData = FloatArray(32) { i ->
-                                val real = fft[i * 2].toFloat()
-                                val imag = fft[i * 2 + 1].toFloat()
-                                (sqrt(real * real + imag * imag) / 128f).coerceIn(0f, 1f)
+        if (visualizerStyle != "Отключен") {
+            val initVis = {
+                val currentSessionId = player.audioSessionId
+                if (currentSessionId != 0) {
+                    try {
+                        val vis = Visualizer(currentSessionId)
+                        vis.captureSize = Visualizer.getCaptureSizeRange()[1]
+                        vis.setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
+                            override fun onWaveFormDataCapture(v: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
+                                if (visualizerStyle != "Спектр (Cava)" && visualizerStyle != "Круг" && visualizerStyle != "Зеркальные бары" && visualizerStyle != "Точки" && waveform != null) {
+                                    targetData = FloatArray(waveform.size / 8) { i -> abs(waveform[i * 8].toInt()) / 128f }
+                                }
                             }
-                        }
+                            override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, samplingRate: Int) {
+                                if (fft != null) {
+                                    targetData = FloatArray(64) { i ->
+                                        val real = fft[i * 2].toFloat()
+                                        val imag = fft[i * 2 + 1].toFloat()
+                                        (sqrt(real * real + imag * imag) / 128f).coerceIn(0f, 1f)
+                                    }
+                                }
+                            }
+                        }, Visualizer.getMaxCaptureRate(), true, true)
+                        vis.enabled = true
+                        visualizer = vis
+                        isVisInit = true
+                    } catch (e: Exception) { 
+                        Log.e("Visualizer", "Init failed", e) 
                     }
-                }, Visualizer.getMaxCaptureRate(), true, true)
-                vis.enabled = true
-                visualizer = vis
-            } catch (e: Exception) { e.printStackTrace() }
+                }
+            }
+            
+            initVis()
+            
+            val handler = Handler(Looper.getMainLooper())
+            val runnable = Runnable { if (!isVisInit) initVis() }
+            handler.postDelayed(runnable, 1500)
+
+            onDispose { 
+                handler.removeCallbacks(runnable)
+                visualizer?.enabled = false
+                visualizer?.release()
+                visualizer = null
+                isVisInit = false
+            }
+        } else {
+            onDispose { }
         }
-        onDispose { visualizer?.enabled = false; visualizer?.release(); visualizer = null }
     }
 
     var accumulatedDrag by remember { mutableStateOf(Offset.Zero) }
@@ -503,23 +532,85 @@ fun PlayerScreen(
             }
         }
 
+        // --- ВИЗУАЛИЗАТОР ---
         if (visualizerStyle != "Отключен") {
-            Canvas(modifier = Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 16.dp)) {
-                if (smoothData.isNotEmpty()) {
-                    val width = size.width; val height = size.height; val centerY = height / 2
-                    if (visualizerStyle == "Волна") {
-                        val path = Path()
-                        val step = width / (smoothData.size - 1).coerceAtLeast(1)
-                        path.moveTo(0f, centerY)
-                        smoothData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); if (index == 0) path.moveTo(x, y) else path.lineTo(x, y) }
-                        path.lineTo(width, centerY); path.lineTo(0f, centerY); path.close()
-                        drawPath(path = path, color = vizColor.copy(alpha = 0.8f))
-                        drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
-                    } else if (visualizerStyle == "Спектр (Cava)") {
-                        val barWidth = width / (smoothData.size * 2)
-                        smoothData.forEachIndexed { index, value ->
-                            val barHeight = value * height; val x = index * barWidth * 2
-                            drawRoundRect(color = vizColor, topLeft = Offset(x, centerY - barHeight / 2), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(4f, 4f))
+            Box(modifier = Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+                if (!isVisInit) {
+                    Text("Ожидание аудио...", style = MaterialTheme.typography.bodySmall, color = theme.onSurface.copy(alpha = 0.5f))
+                }
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    if (smoothData.isNotEmpty() && isVisInit) {
+                        val width = size.width
+                        val height = size.height
+                        val centerY = height / 2
+
+                        when (visualizerStyle) {
+                            "Волна" -> {
+                                val path = Path()
+                                val step = width / (smoothData.size - 1).coerceAtLeast(1)
+                                path.moveTo(0f, centerY)
+                                smoothData.forEachIndexed { index, value ->
+                                    val x = index * step
+                                    val y = centerY - (value * height / 2)
+                                    if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                                }
+                                path.lineTo(width, centerY)
+                                path.lineTo(0f, centerY)
+                                path.close()
+                                drawPath(path = path, color = vizColor.copy(alpha = 0.8f))
+                                drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
+                            }
+                            "Спектр (Cava)" -> {
+                                val barWidth = width / (smoothData.size * 2)
+                                smoothData.forEachIndexed { index, value ->
+                                    val barHeight = value * height
+                                    val x = index * barWidth * 2
+                                    drawRoundRect(color = vizColor, topLeft = Offset(x, centerY - barHeight / 2), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(4f, 4f))
+                                }
+                            }
+                            "Круг" -> {
+                                val radius = height / 2.5f
+                                val center = Offset(width / 2, centerY)
+                                smoothData.forEachIndexed { index, value ->
+                                    val angle = (index.toFloat() / smoothData.size) * 360f
+                                    val barLength = value * height
+                                    val rad = Math.toRadians(angle.toDouble())
+                                    val start = Offset(center.x + (radius * cos(rad)).toFloat(), center.y + (radius * sin(rad)).toFloat())
+                                    val end = Offset(center.x + ((radius + barLength) * cos(rad)).toFloat(), center.y + ((radius + barLength) * sin(rad)).toFloat())
+                                    drawLine(color = vizColor, start = start, end = end, strokeWidth = 3.dp.toPx())
+                                }
+                            }
+                            "Зеркальные бары" -> {
+                                val barWidth = width / (smoothData.size * 2)
+                                smoothData.forEachIndexed { index, value ->
+                                    val barHeight = value * height / 2
+                                    val x = index * barWidth * 2
+                                    drawRoundRect(color = vizColor, topLeft = Offset(x, centerY - barHeight), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(2f, 2f))
+                                    drawRoundRect(color = vizColor, topLeft = Offset(x, centerY), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(2f, 2f))
+                                }
+                            }
+                            "Заполненная волна" -> {
+                                val path = Path()
+                                val step = width / (smoothData.size - 1).coerceAtLeast(1)
+                                path.moveTo(0f, height)
+                                smoothData.forEachIndexed { index, value ->
+                                    val x = index * step
+                                    val y = centerY - (value * height / 2)
+                                    path.lineTo(x, y)
+                                }
+                                path.lineTo(width, height)
+                                path.close()
+                                drawPath(path = path, color = vizColor.copy(alpha = 0.6f))
+                                drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
+                            }
+                            "Точки" -> {
+                                val step = width / (smoothData.size - 1).coerceAtLeast(1)
+                                smoothData.forEachIndexed { index, value ->
+                                    val x = index * step
+                                    val y = centerY - (value * height / 2)
+                                    drawCircle(color = vizColor, radius = (value * 4.dp.toPx()) + 2f, center = Offset(x, y))
+                                }
+                            }
                         }
                     }
                 }
