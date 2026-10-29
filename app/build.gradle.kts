@@ -1,5 +1,3 @@
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -17,8 +15,9 @@ android {
         applicationId = "com.dxaudio"
         minSdk = 23
         targetSdk = 36
+        // Берем код и имя версии из переменных окружения
         versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
-        versionName = System.getenv("VERSION_NAME") ?: "1.0.0"
+        versionName = System.getenv("VERSION_NAME") ?: "2.0.0"
     }
 
     signingConfigs {
@@ -45,7 +44,6 @@ android {
         }
     }
 
-    // --- SPLITS (Разделение по архитектурам) ---
     splits {
         abi {
             isEnable = true
@@ -54,7 +52,7 @@ android {
                 include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
                 isUniversalApk = true
             } else {
-                include("arm64-v8a") // Для дебага собираем только самую ходовую
+                include("arm64-v8a")
                 isUniversalApk = false
             }
         }
@@ -77,17 +75,14 @@ android {
 dependencies {
     val media3Version = "1.11.1"
 
-    // AndroidX Media3 (ExoPlayer)
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.media3:media3-common:$media3Version")
     implementation("androidx.media3:media3-session:$media3Version")
     implementation("androidx.media3:media3-ui-compose-material3:$media3Version")
 
-    // Расширенные кодеки через NextLib (из Maven Central)
     implementation("io.github.anilbeesetti:nextlib-media3ext:1.11.1-0.16.0")
 
-    // Jetpack Compose
     implementation(platform("androidx.compose:compose-bom:2025.10.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
@@ -95,6 +90,5 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // DocumentFile для SAF (выбор папок)
     implementation("androidx.documentfile:documentfile:1.0.1")
 }
