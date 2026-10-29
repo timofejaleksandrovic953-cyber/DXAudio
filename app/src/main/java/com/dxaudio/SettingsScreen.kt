@@ -1,11 +1,13 @@
 package com.dxaudio
 
+import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -22,8 +24,17 @@ fun SettingsScreen(
     onVisualizerColorChange: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("dx_prefs", android.content.Context.MODE_PRIVATE) }
+    
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var cacheClearedText by remember { mutableStateOf("Очистить кэш") }
+    
+    // Crossfade
+    var crossfadeEnabled by remember { mutableStateOf(prefs.getBoolean("crossfade_enabled", false)) }
+    var crossfadeDuration by remember { mutableStateOf(prefs.getLong("crossfade_duration", 5000L)) }
+    var showCrossfadeDialog by remember { mutableStateOf(false) }
+
+    // Визуализаторы
     var showVisualizerDialog by remember { mutableStateOf(false) }
     var showVizColorDialog by remember { mutableStateOf(false) }
     
@@ -31,20 +42,21 @@ fun SettingsScreen(
     var clickCount by remember { mutableIntStateOf(0) }
     var showEasterEgg by remember { mutableStateOf(false) }
 
-    // Получаем реальную версию приложения из Gradle
     val appVersion = remember {
-        try {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
-        } catch (e: Exception) {
-            "1.0.0"
-        }
+        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0" } 
+        catch (e: Exception) { "1.0.0" }
+    }
+
+    fun restartService() {
+        context.stopService(Intent(context, PlaybackService::class.java))
+        context.startService(Intent(context, PlaybackService::class.java))
     }
 
     if (showEasterEgg) {
         AlertDialog(
             onDismissRequest = { showEasterEgg = false },
             title = { Text("🎉 Пасхалка разблокирована!") },
-            text = { Text("Ты нашел секретное сообщение!\n\nЭтот плеер был собран с любовью, нейросетями и большим количеством кофе. Vibe-coding forever! 🚀\n\nА еще у нас есть 6 визуализаторов. Выбери свой в настройках!") },
+            text = { Text("Ты нашел секретное сообщение!\n\nЭтот плеер был собран с любовью, нейросетями и большим количеством кофе. Vibe-coding forever! 🚀\n\nА еще у нас есть 6 визуализаторов и плавные переходы. Кайфуй!") },
             confirmButton = { TextButton(onClick = { showEasterEgg = false }) { Text("Круто!") } }
         )
     }
@@ -61,6 +73,37 @@ fun SettingsScreen(
         )
     }
 
+    if (showCrossfadeDialog) {
+        AlertDialog(
+            onDismissRequest = { showCrossfadeDialog = false },
+            title = { Text("Длительность перехода") },
+            text = {
+                Column {
+                    listOf(3000L to "3 секунды", 5000L to "5 секунд", 8000L to "8 секунд").forEach { (ms, label) ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { 
+                                crossfadeDuration = ms
+                                prefs.edit().putLong("crossfade_duration", ms).apply()
+                                showCrossfadeDialog = false 
+                                if (crossfadeEnabled) restartService()
+                            }.padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = crossfadeDuration == ms, onClick = { 
+                                crossfadeDuration = ms
+                                prefs.edit().putLong("crossfade_duration", ms).apply()
+                                showCrossfadeDialog = false 
+                                if (crossfadeEnabled) restartService()
+                            })
+                            Text(label, modifier = Modifier.padding(start = 8.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showCrossfadeDialog = false }) { Text("Закрыть") } }
+        )
+    }
+
     if (showVisualizerDialog) {
         AlertDialog(
             onDismissRequest = { showVisualizerDialog = false },
@@ -68,7 +111,7 @@ fun SettingsScreen(
             text = {
                 Column {
                     listOf("Отключен", "Волна", "Спектр (Cava)", "Круг", "Зеркальные бары", "Заполненная волна", "Точки").forEach { style ->
-                        Row(Modifier.fillMaxWidth().clickable { onVisualizerStyleChange(style); showVisualizerDialog = false }.padding(vertical = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Row(Modifier.fillMaxWidth().clickable { onVisualizerStyleChange(style); showVisualizerDialog = false }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = visualizerStyle == style, onClick = { onVisualizerStyleChange(style); showVisualizerDialog = false })
                             Text(style, modifier = Modifier.padding(start = 8.dp))
                         }
@@ -86,7 +129,7 @@ fun SettingsScreen(
             text = {
                 Column {
                     listOf("Цвет темы", "Радуга", "Белый").forEach { color ->
-                        Row(Modifier.fillMaxWidth().clickable { onVisualizerColorChange(color); showVizColorDialog = false }.padding(vertical = 12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Row(Modifier.fillMaxWidth().clickable { onVisualizerColorChange(color); showVizColorDialog = false }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = visualizerColor == color, onClick = { onVisualizerColorChange(color); showVizColorDialog = false })
                             Text(color, modifier = Modifier.padding(start = 8.dp))
                         }
@@ -110,6 +153,31 @@ fun SettingsScreen(
         HorizontalDivider()
 
         Text("Воспроизведение", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        
+        ListItem(
+            headlineContent = { Text("Плавный переход (Crossfade)") },
+            supportingContent = { Text(if (crossfadeEnabled) "Включен" else "Выключен") },
+            leadingContent = { Icon(Icons.Default.SwapHoriz, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            trailingContent = { 
+                Switch(checked = crossfadeEnabled, onCheckedChange = { 
+                    crossfadeEnabled = it
+                    prefs.edit().putBoolean("crossfade_enabled", it).apply()
+                    restartService()
+                }) 
+            }
+        )
+        HorizontalDivider()
+        
+        if (crossfadeEnabled) {
+            ListItem(
+                headlineContent = { Text("Длительность перехода") },
+                supportingContent = { Text("${crossfadeDuration / 1000} сек.") },
+                leadingContent = { Icon(Icons.Default.Timer, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                modifier = Modifier.clickable { showCrossfadeDialog = true }
+            )
+            HorizontalDivider()
+        }
+
         ListItem(
             headlineContent = { Text("Автопоказ текста") },
             supportingContent = { Text("Сразу открывать .lrc при запуске трека") },
@@ -117,6 +185,7 @@ fun SettingsScreen(
             trailingContent = { Switch(checked = autoShowLyrics, onCheckedChange = onAutoShowLyricsChange) }
         )
         HorizontalDivider()
+        
         ListItem(
             headlineContent = { Text("Стиль визуализатора") },
             supportingContent = { Text(visualizerStyle) },
@@ -124,6 +193,7 @@ fun SettingsScreen(
             modifier = Modifier.clickable { showVisualizerDialog = true }
         )
         HorizontalDivider()
+        
         ListItem(
             headlineContent = { Text("Цвет визуализатора") },
             supportingContent = { Text(visualizerColor) },
@@ -142,14 +212,13 @@ fun SettingsScreen(
         HorizontalDivider()
         ListItem(
             headlineContent = { Text("О приложении") },
-            // Здесь теперь подставляется реальная версия (например, 1.0.42 или 1.0.1)
             supportingContent = { Text("DXAudio v$appVersion\nНажми 4 раза для сюрприза") },
             leadingContent = { Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
             modifier = Modifier.clickable {
                 clickCount++
                 if (clickCount >= 4) {
                     showEasterEgg = true
-                    clickCount = 0 // Сбрасываем счетчик
+                    clickCount = 0
                 }
             }
         )
