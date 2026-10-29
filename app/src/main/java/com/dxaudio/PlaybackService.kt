@@ -2,8 +2,11 @@ package com.dxaudio
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioProcessor
@@ -28,7 +31,6 @@ class PlaybackService : MediaSessionService() {
         val crossfadeEnabled = prefs.getBoolean("crossfade_enabled", false)
         val crossfadeDurationMs = prefs.getLong("crossfade_duration", 5000L)
 
-        // Настраиваем AudioSink для поддержки плавных переходов
         val renderersFactory = DefaultRenderersFactory(this).apply {
             if (crossfadeEnabled) {
                 val audioProcessors = arrayOf<AudioProcessor>(CrossfadeAudioProcessor(crossfadeDurationMs))
@@ -51,6 +53,16 @@ class PlaybackService : MediaSessionService() {
             .build()
 
         PlayerHolder.audioSessionId.value = exoPlayer!!.audioSessionId
+
+        // Слушатель для обновления виджета
+        exoPlayer!!.addListener(object : Player.Listener {
+            override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+                super.onMediaMetadataChanged(mediaMetadata)
+                val title = mediaMetadata.title?.toString() ?: "Неизвестно"
+                val artist = mediaMetadata.artist?.toString() ?: "Неизвестный исполнитель"
+                PlayerWidgetProvider.updateAllWidgets(this@PlaybackService, title, artist)
+            }
+        })
 
         val sessionActivityPendingIntent = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
