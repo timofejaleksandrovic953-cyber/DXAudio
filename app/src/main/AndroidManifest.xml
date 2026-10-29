@@ -4,7 +4,7 @@
     <!-- Базовые разрешения -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     
     <!-- Разрешение для визуализатора -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -23,6 +23,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.DXAudio">
 
+        <!-- Главная активность -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -75,6 +76,18 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!-- Виджет на рабочий стол -->
+        <receiver
+            android:name=".PlayerWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
 
     </application>
 </manifest>
