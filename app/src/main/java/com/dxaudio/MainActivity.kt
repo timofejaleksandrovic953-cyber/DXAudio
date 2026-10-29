@@ -12,7 +12,6 @@ import android.media.audiofx.Visualizer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -33,6 +32,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -83,6 +83,7 @@ data class AudioMetadata(val title: String, val artist: String, val album: Strin
 sealed class Screen {
     object Files : Screen()
     object Playlists : Screen()
+    object Library : Screen()
     object Settings : Screen()
     object Themes : Screen()
     object Player : Screen()
@@ -98,7 +99,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         handleIntent(intent)
 
-        // Инициализация MediaController для связи с сервисом
         val sessionToken = SessionToken(this, ComponentName(this, PlaybackService::class.java))
         controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
 
@@ -119,36 +119,26 @@ class MainActivity : ComponentActivity() {
             var currentLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
             var isPlaying by remember { mutableStateOf(false) }
 
-            // Подключение к сервису
             LaunchedEffect(Unit) {
                 controllerFuture?.addListener({
-                    try {
-                        mediaController = controllerFuture?.get()
-                    } catch (e: Exception) { e.printStackTrace() }
+                    try { mediaController = controllerFuture?.get() } catch (e: Exception) { e.printStackTrace() }
                 }, ContextCompat.getMainExecutor(context))
             }
 
-            // Запрос разрешений (Микрофон + Уведомления)
             val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ -> }
             LaunchedEffect(Unit) {
                 val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) permissions.add(Manifest.permission.POST_NOTIFICATIONS)
                 permissionLauncher.launch(permissions.toTypedArray())
             }
 
-            // Слушаем состояние плеера
             LaunchedEffect(mediaController) {
                 mediaController?.addListener(object : Player.Listener {
-                    override fun onIsPlayingChanged(playing: Boolean) {
-                        isPlaying = playing
-                    }
+                    override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                        // Обновляем метаданные при смене трека в плейлисте
                         mediaItem?.mediaId?.let { uriStr ->
                             val uri = Uri.parse(uriStr)
-                            // Запускаем корутину, чтобы не блокировать слушатель
+                            FavoritesRepository.addToHistory(context, uri) // Добавляем в историю
                             CoroutineScope(Dispatchers.IO).launch {
                                 val lyrics = loadLyrics(context, uri)
                                 val meta = loadMetadata(context, uri)
@@ -171,6 +161,7 @@ class MainActivity : ComponentActivity() {
                         currentLyrics = loadLyrics(context, uri)
                         currentMetadata = loadMetadata(context, uri)
                     }
+                    FavoritesRepository.addToHistory(context, uri)
                     currentScreen = Screen.Player
                     externalAudioUri = null
                 }
@@ -216,6 +207,7 @@ class MainActivity : ComponentActivity() {
                                         NavigationBar(containerColor = currentTheme.surface) {
                                             NavigationBarItem(selected = currentScreen == Screen.Files, onClick = { currentScreen = Screen.Files }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Файлы") }, colors = navColors(currentTheme))
                                             NavigationBarItem(selected = currentScreen == Screen.Playlists, onClick = { currentScreen = Screen.Playlists }, icon = { Icon(Icons.Default.PlaylistPlay, null) }, label = { Text("Плейлисты") }, colors = navColors(currentTheme))
+                                            NavigationBarItem(selected = currentScreen == Screen.Library, onClick = { currentScreen = Screen.Library }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Библиотека") }, colors = navColors(currentTheme))
                                             NavigationBarItem(selected = currentScreen == Screen.Settings || currentScreen == Screen.Themes, onClick = { currentScreen = Screen.Settings }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Настройки") }, colors = navColors(currentTheme))
                                         }
                                     }
@@ -229,6 +221,9 @@ class MainActivity : ComponentActivity() {
                                         onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri }
                                     )
                                     Screen.Playlists -> PlaylistsScreen(onPlayAudio = { uri, _ -> externalAudioUri = uri })
+                                    Screen.Library -> LibraryScreen(
+                                        onPlayAudio = { uri, _ -> externalAudioUri = uri }
+                                    )
                                     Screen.Settings -> SettingsScreen(
                                         onOpenThemes = { currentScreen = Screen.Themes },
                                         autoShowLyrics = autoShowLyrics,
@@ -259,7 +254,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             } else {
-                // Загрузка...
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             }
         }
@@ -288,9 +282,7 @@ class MainActivity : ComponentActivity() {
                         val min = match.groupValues[1].toLong()
                         val sec = match.groupValues[2].toDouble()
                         val text = match.groupValues[3].trim()
-                        if (text.isNotEmpty()) {
-                            lyrics.add(LyricLine((min * 60 * 1000) + (sec * 1000).toLong(), text))
-                        }
+                        if (text.isNotEmpty()) lyrics.add(LyricLine((min * 60 * 1000) + (sec * 1000).toLong(), text))
                     }
                 }
             }
@@ -348,6 +340,41 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+fun LibraryScreen(onPlayAudio: (Uri, String) -> Unit) {
+    val context = LocalContext.current
+    var selectedTab by remember { mutableStateOf(0) } // 0 - Избранное, 1 - История
+    
+    val favorites = remember { FavoritesRepository.getFavorites(context) }
+    val history = remember { FavoritesRepository.getFavoritesHistory(context) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TabRow(selectedTabIndex = selectedTab) {
+            Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Избранное") }, icon = { Icon(Icons.Default.Favorite, null) })
+            Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("История") }, icon = { Icon(Icons.Default.History, null) })
+        }
+        
+        val currentList = if (selectedTab == 0) favorites else history
+        if (currentList.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(if (selectedTab == 0) "Нет избранных треков" else "История пуста") }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(currentList) { uri ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onPlayAudio(uri, uri.lastPathSegment ?: "Трек") }.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.MusicNote, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                        Spacer(Modifier.width(12.dp))
+                        Text(uri.lastPathSegment?.substringAfterLast("/") ?: "Неизвестный трек", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    HorizontalDivider()
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun MiniPlayer(theme: DxTheme, title: String, isPlaying: Boolean, onPlayPause: () -> Unit, onClick: () -> Unit) {
     Surface(color = theme.surface, modifier = Modifier.fillMaxWidth().padding(8.dp).shadow(4.dp, RoundedCornerShape(12.dp)).clickable { onClick() }, shape = RoundedCornerShape(12.dp)) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -385,8 +412,16 @@ fun PlayerScreen(
     var targetData by remember { mutableStateOf(FloatArray(64) { 0f }) }
     var smoothData by remember { mutableStateOf(FloatArray(64) { 0f }) }
     var visualizer by remember { mutableStateOf<Visualizer?>(null) }
-    
     var isVisInit by remember { mutableStateOf(false) }
+
+    // --- ИЗБРАННОЕ И ОЧЕРЕДЬ ---
+    var isFavorite by remember { mutableStateOf(FavoritesRepository.isFavorite(context, metadata?.let { Uri.parse(it.title) } ?: Uri.EMPTY)) }
+    var showQueueSheet by remember { mutableStateOf(false) }
+    
+    // Слушаем изменения текущего трека для обновления сердечка
+    LaunchedEffect(player.currentMediaItem) {
+        isFavorite = FavoritesRepository.isFavorite(context, player.currentMediaItem?.localConfiguration?.uri)
+    }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -422,7 +457,6 @@ fun PlayerScreen(
         }
     }
 
-    // Инициализация визуализатора с задержкой, если sessionId == 0
     DisposableEffect(audioSessionId, visualizerStyle) {
         if (visualizerStyle != "Отключен") {
             val initVis = {
@@ -450,14 +484,10 @@ fun PlayerScreen(
                         vis.enabled = true
                         visualizer = vis
                         isVisInit = true
-                    } catch (e: Exception) { 
-                        Log.e("Visualizer", "Init failed", e) 
-                    }
+                    } catch (e: Exception) { Log.e("Visualizer", "Init failed", e) }
                 }
             }
-            
             initVis()
-            
             val handler = Handler(Looper.getMainLooper())
             val runnable = Runnable { if (!isVisInit) initVis() }
             handler.postDelayed(runnable, 1500)
@@ -496,11 +526,57 @@ fun PlayerScreen(
         else -> theme.primary
     }
 
+    // Очередь (Bottom Sheet)
+    if (showQueueSheet) {
+        ModalBottomSheet(onDismissRequest = { showQueueSheet = false }, containerColor = theme.surface) {
+            Text("Очередь воспроизведения", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp), color = theme.onSurface)
+            LazyColumn(modifier = Modifier.fillMaxHeight(0.8f)) {
+                items(player.mediaItemCount) { index ->
+                    val item = player.getMediaItemAt(index)
+                    val isCurrent = index == player.currentMediaItemIndex
+                    Row(
+                        Modifier.fillMaxWidth().clickable { 
+                            player.seekTo(index, 0)
+                            showQueueSheet = false 
+                        }.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = item.mediaId.substringAfterLast("/"), 
+                            color = if (isCurrent) theme.primary else theme.onSurface,
+                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                }
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize().background(gradient).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = theme.onSurface) }
             Text(if (showLyrics) "Текст песни" else "Сейчас играет", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), color = theme.onSurface)
             
+            // Кнопка Очереди
+            IconButton(onClick = { showQueueSheet = true }) {
+                Icon(Icons.Default.QueueMusic, contentDescription = "Очередь", tint = theme.onSurface)
+            }
+            
+            // Кнопка Сердечка
+            IconButton(onClick = { 
+                player.currentMediaItem?.localConfiguration?.uri?.let { uri ->
+                    isFavorite = FavoritesRepository.toggleFavorite(context, uri)
+                }
+            }) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                    contentDescription = "В избранное",
+                    tint = if (isFavorite) theme.primary else theme.onSurface
+                )
+            }
+
             if (lyrics.isNotEmpty()) {
                 IconButton(onClick = { showLyrics = !showLyrics }) {
                     Icon(if (showLyrics) Icons.Default.MusicNote else Icons.Default.Subject, contentDescription = "Текст", tint = theme.onSurface)
@@ -532,7 +608,6 @@ fun PlayerScreen(
             }
         }
 
-        // --- ВИЗУАЛИЗАТОР ---
         if (visualizerStyle != "Отключен") {
             Box(modifier = Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
                 if (!isVisInit) {
@@ -540,41 +615,23 @@ fun PlayerScreen(
                 }
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     if (smoothData.isNotEmpty() && isVisInit) {
-                        val width = size.width
-                        val height = size.height
-                        val centerY = height / 2
-
+                        val width = size.width; val height = size.height; val centerY = height / 2
                         when (visualizerStyle) {
                             "Волна" -> {
-                                val path = Path()
-                                val step = width / (smoothData.size - 1).coerceAtLeast(1)
+                                val path = Path(); val step = width / (smoothData.size - 1).coerceAtLeast(1)
                                 path.moveTo(0f, centerY)
-                                smoothData.forEachIndexed { index, value ->
-                                    val x = index * step
-                                    val y = centerY - (value * height / 2)
-                                    if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                                }
-                                path.lineTo(width, centerY)
-                                path.lineTo(0f, centerY)
-                                path.close()
-                                drawPath(path = path, color = vizColor.copy(alpha = 0.8f))
-                                drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
+                                smoothData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); if (index == 0) path.moveTo(x, y) else path.lineTo(x, y) }
+                                path.lineTo(width, centerY); path.lineTo(0f, centerY); path.close()
+                                drawPath(path = path, color = vizColor.copy(alpha = 0.8f)); drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
                             }
                             "Спектр (Cava)" -> {
                                 val barWidth = width / (smoothData.size * 2)
-                                smoothData.forEachIndexed { index, value ->
-                                    val barHeight = value * height
-                                    val x = index * barWidth * 2
-                                    drawRoundRect(color = vizColor, topLeft = Offset(x, centerY - barHeight / 2), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(4f, 4f))
-                                }
+                                smoothData.forEachIndexed { index, value -> val barHeight = value * height; val x = index * barWidth * 2; drawRoundRect(color = vizColor, topLeft = Offset(x, centerY - barHeight / 2), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(4f, 4f)) }
                             }
                             "Круг" -> {
-                                val radius = height / 2.5f
-                                val center = Offset(width / 2, centerY)
+                                val radius = height / 2.5f; val center = Offset(width / 2, centerY)
                                 smoothData.forEachIndexed { index, value ->
-                                    val angle = (index.toFloat() / smoothData.size) * 360f
-                                    val barLength = value * height
-                                    val rad = Math.toRadians(angle.toDouble())
+                                    val angle = (index.toFloat() / smoothData.size) * 360f; val barLength = value * height; val rad = Math.toRadians(angle.toDouble())
                                     val start = Offset(center.x + (radius * cos(rad)).toFloat(), center.y + (radius * sin(rad)).toFloat())
                                     val end = Offset(center.x + ((radius + barLength) * cos(rad)).toFloat(), center.y + ((radius + barLength) * sin(rad)).toFloat())
                                     drawLine(color = vizColor, start = start, end = end, strokeWidth = 3.dp.toPx())
@@ -583,33 +640,21 @@ fun PlayerScreen(
                             "Зеркальные бары" -> {
                                 val barWidth = width / (smoothData.size * 2)
                                 smoothData.forEachIndexed { index, value ->
-                                    val barHeight = value * height / 2
-                                    val x = index * barWidth * 2
+                                    val barHeight = value * height / 2; val x = index * barWidth * 2
                                     drawRoundRect(color = vizColor, topLeft = Offset(x, centerY - barHeight), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(2f, 2f))
                                     drawRoundRect(color = vizColor, topLeft = Offset(x, centerY), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(2f, 2f))
                                 }
                             }
                             "Заполненная волна" -> {
-                                val path = Path()
-                                val step = width / (smoothData.size - 1).coerceAtLeast(1)
+                                val path = Path(); val step = width / (smoothData.size - 1).coerceAtLeast(1)
                                 path.moveTo(0f, height)
-                                smoothData.forEachIndexed { index, value ->
-                                    val x = index * step
-                                    val y = centerY - (value * height / 2)
-                                    path.lineTo(x, y)
-                                }
-                                path.lineTo(width, height)
-                                path.close()
-                                drawPath(path = path, color = vizColor.copy(alpha = 0.6f))
-                                drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
+                                smoothData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); path.lineTo(x, y) }
+                                path.lineTo(width, height); path.close()
+                                drawPath(path = path, color = vizColor.copy(alpha = 0.6f)); drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
                             }
                             "Точки" -> {
                                 val step = width / (smoothData.size - 1).coerceAtLeast(1)
-                                smoothData.forEachIndexed { index, value ->
-                                    val x = index * step
-                                    val y = centerY - (value * height / 2)
-                                    drawCircle(color = vizColor, radius = (value * 4.dp.toPx()) + 2f, center = Offset(x, y))
-                                }
+                                smoothData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); drawCircle(color = vizColor, radius = (value * 4.dp.toPx()) + 2f, center = Offset(x, y)) }
                             }
                         }
                     }
