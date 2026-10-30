@@ -127,7 +127,6 @@ class MainActivity : ComponentActivity() {
             var currentLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
             var isPlaying by remember { mutableStateOf(false) }
 
-            // Диалог "Что нового"
             var showWhatsNew by remember { mutableStateOf(false) }
             LaunchedEffect(Unit) {
                 if (!prefs.getBoolean("whats_new_v2", false)) {
@@ -226,10 +225,10 @@ class MainActivity : ComponentActivity() {
                                 if (currentScreen != Screen.Player) {
                                     Column {
                                         if (currentMetadata != null) {
-                                            val progress = if (mediaController?.duration ?: 0 > 0) (mediaController?.currentPosition?.toFloat() ?: 0f) / mediaController!!.duration.toFloat() else 0f
+                                            // ИСПРАВЛЕНО: Правильный приоритет операторов (скобки)
+                                            val progress = if ((mediaController?.duration ?: 0L) > 0L) (mediaController?.currentPosition?.toFloat() ?: 0f) / mediaController!!.duration.toFloat() else 0f
                                             MiniPlayer(currentTheme, currentMetadata!!.title, progress, isPlaying, { if (isPlaying) mediaController?.pause() else mediaController?.play() }, { currentScreen = Screen.Player })
                                         }
-                                        // Плавающий док
                                         Box(
                                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                                             contentAlignment = Alignment.Center
@@ -250,7 +249,6 @@ class MainActivity : ComponentActivity() {
                             }
                         ) { paddingValues ->
                             Box(modifier = Modifier.padding(paddingValues)) {
-                                // Плавный переход между экранами
                                 AnimatedContent(
                                     targetState = currentScreen,
                                     transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(300)) },
@@ -424,9 +422,9 @@ fun MiniPlayer(theme: DxTheme, title: String, progress: Float, isPlaying: Boolea
                 Text(text = title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, color = theme.onSurface, style = MaterialTheme.typography.bodyMedium)
                 IconButton(onClick = onPlayPause) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null, tint = theme.primary) }
             }
-            // Тонкая полоса прогресса
+            // ИСПРАВЛЕНО: Передача progress как лямбды
             LinearProgressIndicator(
-                progress = progress,
+                progress = { progress },
                 color = theme.primary,
                 trackColor = theme.surfaceVariant.copy(alpha = 0.3f),
                 modifier = Modifier.fillMaxWidth().height(2.dp)
@@ -467,7 +465,6 @@ fun PlayerScreen(
     var isFavorite by remember { mutableStateOf(FavoritesRepository.isFavorite(context, player.currentMediaItem?.localConfiguration?.uri)) }
     var showQueueSheet by remember { mutableStateOf(false) }
 
-    // Анимация пульсации кнопки Play
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val playScale by infiniteTransition.animateFloat(
         initialValue = 1f,
@@ -564,17 +561,17 @@ fun PlayerScreen(
         }
     }
 
-    var accumulatedDrag by remember { mutableStateOf(Offset.Zero) }
+    // ИСПРАВЛЕНО: Вынесли accumulator внутрь pointerInput, чтобы избежать багов перерисовки
     val gestureModifier = Modifier.pointerInput(Unit) {
+        var dragAccumulator = Offset.Zero
         detectDragGestures(
-            onDragStart = { accumulatedDrag = Offset.Zero },
-            onDrag = { change, dragAmount -> change.consume(); accumulatedDrag += dragAmount },
+            onDragStart = { dragAccumulator = Offset.Zero },
+            onDrag = { change, dragAmount -> change.consume(); dragAccumulator += dragAmount },
             onDragEnd = {
-                if (accumulatedDrag.x > 150) player.seekToPrevious()
-                else if (accumulatedDrag.x < -150) player.seekToNext()
-                else if (accumulatedDrag.y > 150) audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
-                else if (accumulatedDrag.y < -150) audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
-                accumulatedDrag = Offset.Zero
+                if (dragAccumulator.x > 150) player.seekToPrevious()
+                else if (dragAccumulator.x < -150) player.seekToNext()
+                else if (dragAccumulator.y > 150) audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+                else if (dragAccumulator.y < -150) audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
             }
         )
     }
@@ -608,7 +605,6 @@ fun PlayerScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // 1. Фон из размытой обложки
         if (metadata?.bitmap != null) {
             Image(
                 bitmap = metadata.bitmap.asImageBitmap(),
@@ -730,7 +726,6 @@ fun PlayerScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Плавающая панель управления
             Box(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp),
                 contentAlignment = Alignment.Center
