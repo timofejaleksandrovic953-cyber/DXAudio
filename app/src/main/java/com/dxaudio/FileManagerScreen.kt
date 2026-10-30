@@ -38,9 +38,8 @@ fun FileManagerScreen(
     var files by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     
-    // Поиск и сортировка
     var searchQuery by remember { mutableStateOf("") }
-    var sortBy by remember { mutableStateOf("Имя") } // Имя, Дата
+    var sortBy by remember { mutableStateOf("Имя") }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let {
@@ -72,13 +71,13 @@ fun FileManagerScreen(
         }
     }
 
-    // Фильтрация и сортировка
+    // ИСПРАВЛЕНО: Правильная сортировка (папки всегда сверху)
     val processedFiles = remember(files, searchQuery, sortBy) {
         val filtered = files.filter { it.name?.contains(searchQuery, ignoreCase = true) == true || searchQuery.isBlank() }
         if (sortBy == "Имя") {
-            filtered.sortedWith(compareBy({ !it.isDirectory }, { it.name?.lowercase() }))
+            filtered.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name?.lowercase() })
         } else {
-            filtered.sortedWith(compareBy({ !it.isDirectory }, { it.lastModified() }).reversed())
+            filtered.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenByDescending { it.lastModified() })
         }
     }
 
@@ -90,7 +89,6 @@ fun FileManagerScreen(
                 }
             }
         } else {
-            // Панель управления (Поиск и сортировка)
             Column(modifier = Modifier.padding(16.dp)) {
                 OutlinedTextField(
                     value = searchQuery,
