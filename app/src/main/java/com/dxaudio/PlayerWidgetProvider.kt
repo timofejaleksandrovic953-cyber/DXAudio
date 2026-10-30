@@ -8,9 +8,9 @@ import android.content.Context
 import android.content.Intent
 import android.widget.RemoteViews
 import androidx.annotation.OptIn
-import androidx.media3.common.PlaybackState
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.session.MediaButtonReceiver
+import androidx.media3.session.PlaybackPendingIntentBuilder
 
 class PlayerWidgetProvider : AppWidgetProvider() {
 
@@ -29,7 +29,7 @@ class PlayerWidgetProvider : AppWidgetProvider() {
             }
         }
 
-        @OptIn(UnstableApi::class) // Для MediaButtonReceiver.buildMediaButtonPendingIntent
+        @OptIn(UnstableApi::class)
         private fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int, title: String, artist: String) {
             val views = RemoteViews(context.packageName, R.layout.widget_player)
 
@@ -42,10 +42,16 @@ class PlayerWidgetProvider : AppWidgetProvider() {
             views.setOnClickPendingIntent(R.id.widget_title, pendingIntent)
             views.setOnClickPendingIntent(R.id.widget_icon, pendingIntent)
 
-            // Кнопки управления (используем PlaybackState из Media3)
-            val playPauseIntent = MediaButtonReceiver.buildMediaButtonPendingIntent(context, PlaybackState.ACTION_PLAY_PAUSE)
-            val nextIntent = MediaButtonReceiver.buildMediaButtonPendingIntent(context, PlaybackState.ACTION_SKIP_TO_NEXT)
-            val prevIntent = MediaButtonReceiver.buildMediaButtonPendingIntent(context, PlaybackState.ACTION_SKIP_TO_PREVIOUS)
+            // PlaybackPendingIntentBuilder — новый способ для виджетов в Media3
+            val playPauseIntent = PlaybackPendingIntentBuilder(
+                context, Player.COMMAND_PLAY_PAUSE, PlaybackService::class.java
+            ).build()
+            val nextIntent = PlaybackPendingIntentBuilder(
+                context, Player.COMMAND_SEEK_TO_NEXT, PlaybackService::class.java
+            ).build()
+            val prevIntent = PlaybackPendingIntentBuilder(
+                context, Player.COMMAND_SEEK_TO_PREVIOUS, PlaybackService::class.java
+            ).build()
 
             views.setOnClickPendingIntent(R.id.widget_play_pause, playPauseIntent)
             views.setOnClickPendingIntent(R.id.widget_next, nextIntent)
