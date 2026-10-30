@@ -225,7 +225,6 @@ class MainActivity : ComponentActivity() {
                                 if (currentScreen != Screen.Player) {
                                     Column {
                                         if (currentMetadata != null) {
-                                            // ИСПРАВЛЕНО: Правильный приоритет операторов (скобки)
                                             val progress = if ((mediaController?.duration ?: 0L) > 0L) (mediaController?.currentPosition?.toFloat() ?: 0f) / mediaController!!.duration.toFloat() else 0f
                                             MiniPlayer(currentTheme, currentMetadata!!.title, progress, isPlaying, { if (isPlaying) mediaController?.pause() else mediaController?.play() }, { currentScreen = Screen.Player })
                                         }
@@ -405,7 +404,7 @@ fun LibraryScreen(onPlayAudio: (Uri, String) -> Unit) {
                         Spacer(Modifier.width(12.dp))
                         Text(uri.lastPathSegment?.substringAfterLast("/") ?: "Неизвестный трек", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
                 }
             }
         }
@@ -422,11 +421,11 @@ fun MiniPlayer(theme: DxTheme, title: String, progress: Float, isPlaying: Boolea
                 Text(text = title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, color = theme.onSurface, style = MaterialTheme.typography.bodyMedium)
                 IconButton(onClick = onPlayPause) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null, tint = theme.primary) }
             }
-            // ИСПРАВЛЕНО: Передача progress как лямбды
+            // ИСПРАВЛЕНО: Лямбда для progress и theme.progressBg для фона
             LinearProgressIndicator(
                 progress = { progress },
                 color = theme.primary,
-                trackColor = theme.surfaceVariant.copy(alpha = 0.3f),
+                trackColor = theme.progressBg,
                 modifier = Modifier.fillMaxWidth().height(2.dp)
             )
         }
@@ -561,7 +560,6 @@ fun PlayerScreen(
         }
     }
 
-    // ИСПРАВЛЕНО: Вынесли accumulator внутрь pointerInput, чтобы избежать багов перерисовки
     val gestureModifier = Modifier.pointerInput(Unit) {
         var dragAccumulator = Offset.Zero
         detectDragGestures(
