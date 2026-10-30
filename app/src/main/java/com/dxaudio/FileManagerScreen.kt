@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Subject
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,6 +25,7 @@ import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileManagerScreen(
     onPlayAudio: (Uri, String) -> Unit,
@@ -35,6 +37,10 @@ fun FileManagerScreen(
     var currentDirUri by remember { mutableStateOf(prefs.getString("saf_tree_uri", null)?.let { Uri.parse(it) }) }
     var files by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
+    
+    // Поиск и сортировка
+    var searchQuery by remember { mutableStateOf("") }
+    var sortBy by remember { mutableStateOf("Имя") } // Имя, Дата
 
     val folderPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let {
@@ -60,9 +66,19 @@ fun FileManagerScreen(
                     file.name?.endsWith(".m3u", true) == true ||
                     file.name?.endsWith(".lrc", true) == true
                 }
-                files = filtered.sortedWith(compareBy({ !it.isDirectory }, { it.name?.lowercase() }))
+                files = filtered
             }
             isLoading = false
+        }
+    }
+
+    // Фильтрация и сортировка
+    val processedFiles = remember(files, searchQuery, sortBy) {
+        val filtered = files.filter { it.name?.contains(searchQuery, ignoreCase = true) == true || searchQuery.isBlank() }
+        if (sortBy == "Имя") {
+            filtered.sortedWith(compareBy({ !it.isDirectory }, { it.name?.lowercase() }))
+        } else {
+            filtered.sortedWith(compareBy({ !it.isDirectory }, { it.lastModified() }).reversed())
         }
     }
 
@@ -74,20 +90,33 @@ fun FileManagerScreen(
                 }
             }
         } else {
-            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Выбрана папка", style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = { folderPickerLauncher.launch(null) }) { Text("Сменить") }
+            // Панель управления (Поиск и сортировка)
+            Column(modifier = Modifier.padding(16.dp)) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Поиск...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = sortBy == "Имя", onClick = { sortBy = "Имя" }, label = { Text("По имени") })
+                    FilterChip(selected = sortBy == "Дата", onClick = { sortBy = "Дата" }, label = { Text("По дате") })
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { folderPickerLauncher.launch(null) }) { Text("Сменить папку") }
+                }
             }
 
             if (isLoading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(files, key = { it.uri.toString() }) { file ->
+                    items(processedFiles, key = { it.uri.toString() }) { file ->
                         Row(
                             modifier = Modifier.fillMaxWidth().clickable {
                                 if (file.isDirectory) {
-                                    // Для простоты заходим в корень выбранной папки (полноценная навигация по SAF сложнее)
                                     currentDirUri = file.uri 
                                 } else {
                                     val name = file.name ?: "Unknown"
@@ -110,7 +139,7 @@ fun FileManagerScreen(
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(text = file.name ?: "Без имени", style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        HorizontalDivider()
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                     }
                 }
             }
