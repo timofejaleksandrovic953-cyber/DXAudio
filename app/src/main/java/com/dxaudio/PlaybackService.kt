@@ -3,14 +3,17 @@ package com.dxaudio
 import android.app.PendingIntent
 import android.content.Intent
 import android.util.Log
+import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.CrossfadeAudioProcessor
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.audio.AudioProcessor
-import androidx.media3.exoplayer.audio.CrossfadeAudioProcessor
+import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -24,6 +27,7 @@ class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private var exoPlayer: ExoPlayer? = null
 
+    @OptIn(UnstableApi::class) // Для CrossfadeAudioProcessor и buildAudioSink
     override fun onCreate() {
         super.onCreate()
         
@@ -31,13 +35,24 @@ class PlaybackService : MediaSessionService() {
         val crossfadeEnabled = prefs.getBoolean("crossfade_enabled", false)
         val crossfadeDurationMs = prefs.getLong("crossfade_duration", 5000L)
 
-        val renderersFactory = DefaultRenderersFactory(this).apply {
-            if (crossfadeEnabled) {
-                val audioProcessors = arrayOf<AudioProcessor>(CrossfadeAudioProcessor(crossfadeDurationMs))
-                val audioSink = DefaultAudioSink.Builder(this@PlaybackService)
+        // Кастомная RenderersFactory для внедрения Crossfade
+        val renderersFactory = object : DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: android.content.Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): AudioSink? {
+                if (!crossfadeEnabled) {
+                    return super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
+                }
+                val audioProcessors = arrayOf<AudioProcessor>(
+                    CrossfadeAudioProcessor(crossfadeDurationMs)
+                )
+                return DefaultAudioSink.Builder(context)
                     .setAudioProcessorChain(DefaultAudioSink.DefaultAudioProcessorChain(audioProcessors))
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                     .build()
-                setAudioSink(audioSink)
             }
         }
 
