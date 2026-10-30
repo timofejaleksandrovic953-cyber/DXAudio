@@ -27,7 +27,7 @@ class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private var exoPlayer: ExoPlayer? = null
 
-    @OptIn(UnstableApi::class) // Для CrossfadeAudioProcessor и buildAudioSink
+    @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
         
@@ -35,7 +35,6 @@ class PlaybackService : MediaSessionService() {
         val crossfadeEnabled = prefs.getBoolean("crossfade_enabled", false)
         val crossfadeDurationMs = prefs.getLong("crossfade_duration", 5000L)
 
-        // Кастомная RenderersFactory для внедрения Crossfade
         val renderersFactory = object : DefaultRenderersFactory(this) {
             override fun buildAudioSink(
                 context: android.content.Context,
@@ -45,11 +44,14 @@ class PlaybackService : MediaSessionService() {
                 if (!crossfadeEnabled) {
                     return super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
                 }
+                // CrossfadeAudioProcessor теперь в androidx.media3.common.audio
                 val audioProcessors = arrayOf<AudioProcessor>(
                     CrossfadeAudioProcessor(crossfadeDurationMs)
                 )
                 return DefaultAudioSink.Builder(context)
-                    .setAudioProcessorChain(DefaultAudioSink.DefaultAudioProcessorChain(audioProcessors))
+                    .setAudioProcessorChain(
+                        DefaultAudioSink.DefaultAudioProcessorChain(audioProcessors)
+                    )
                     .setEnableFloatOutput(enableFloatOutput)
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                     .build()
@@ -69,7 +71,6 @@ class PlaybackService : MediaSessionService() {
 
         PlayerHolder.audioSessionId.value = exoPlayer!!.audioSessionId
 
-        // Слушатель для обновления виджета
         exoPlayer!!.addListener(object : Player.Listener {
             override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
                 super.onMediaMetadataChanged(mediaMetadata)
