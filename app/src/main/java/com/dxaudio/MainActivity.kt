@@ -19,6 +19,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.*
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -37,7 +42,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -119,6 +127,22 @@ class MainActivity : ComponentActivity() {
             var currentLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
             var isPlaying by remember { mutableStateOf(false) }
 
+            // Диалог "Что нового"
+            var showWhatsNew by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                if (!prefs.getBoolean("whats_new_v2", false)) {
+                    showWhatsNew = true
+                }
+            }
+            if (showWhatsNew) {
+                AlertDialog(
+                    onDismissRequest = { showWhatsNew = false; prefs.edit().putBoolean("whats_new_v2", true).apply() },
+                    title = { Text("🎉 DXAudio 2.0!") },
+                    text = { Text("Что нового:\n\n• Плавные переходы и новый дизайн плеера\n• Виджет на рабочий стол\n• Избранное и история\n• Очередь воспроизведения\n• Поиск и сортировка в файлах\n• Плейлисты в виде сетки") },
+                    confirmButton = { TextButton(onClick = { showWhatsNew = false; prefs.edit().putBoolean("whats_new_v2", true).apply() }) { Text("Круто!") } }
+                )
+            }
+
             LaunchedEffect(Unit) {
                 controllerFuture?.addListener({
                     try { mediaController = controllerFuture?.get() } catch (e: Exception) { e.printStackTrace() }
@@ -138,7 +162,7 @@ class MainActivity : ComponentActivity() {
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                         mediaItem?.mediaId?.let { uriStr ->
                             val uri = Uri.parse(uriStr)
-                            FavoritesRepository.addToHistory(context, uri) // Добавляем в историю
+                            FavoritesRepository.addToHistory(context, uri)
                             CoroutineScope(Dispatchers.IO).launch {
                                 val lyrics = loadLyrics(context, uri)
                                 val meta = loadMetadata(context, uri)
@@ -202,52 +226,68 @@ class MainActivity : ComponentActivity() {
                                 if (currentScreen != Screen.Player) {
                                     Column {
                                         if (currentMetadata != null) {
-                                            MiniPlayer(currentTheme, currentMetadata!!.title, isPlaying, { if (isPlaying) mediaController?.pause() else mediaController?.play() }, { currentScreen = Screen.Player })
+                                            val progress = if (mediaController?.duration ?: 0 > 0) (mediaController?.currentPosition?.toFloat() ?: 0f) / mediaController!!.duration.toFloat() else 0f
+                                            MiniPlayer(currentTheme, currentMetadata!!.title, progress, isPlaying, { if (isPlaying) mediaController?.pause() else mediaController?.play() }, { currentScreen = Screen.Player })
                                         }
-                                        NavigationBar(containerColor = currentTheme.surface) {
-                                            NavigationBarItem(selected = currentScreen == Screen.Files, onClick = { currentScreen = Screen.Files }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Файлы") }, colors = navColors(currentTheme))
-                                            NavigationBarItem(selected = currentScreen == Screen.Playlists, onClick = { currentScreen = Screen.Playlists }, icon = { Icon(Icons.Default.PlaylistPlay, null) }, label = { Text("Плейлисты") }, colors = navColors(currentTheme))
-                                            NavigationBarItem(selected = currentScreen == Screen.Library, onClick = { currentScreen = Screen.Library }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Библиотека") }, colors = navColors(currentTheme))
-                                            NavigationBarItem(selected = currentScreen == Screen.Settings || currentScreen == Screen.Themes, onClick = { currentScreen = Screen.Settings }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Настройки") }, colors = navColors(currentTheme))
+                                        // Плавающий док
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            NavigationBar(
+                                                modifier = Modifier.clip(RoundedCornerShape(24.dp)).shadow(8.dp, RoundedCornerShape(24.dp)),
+                                                containerColor = currentTheme.surface.copy(alpha = 0.95f),
+                                                contentColor = currentTheme.onSurface
+                                            ) {
+                                                NavigationBarItem(selected = currentScreen == Screen.Files, onClick = { currentScreen = Screen.Files }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Файлы") }, colors = navColors(currentTheme))
+                                                NavigationBarItem(selected = currentScreen == Screen.Playlists, onClick = { currentScreen = Screen.Playlists }, icon = { Icon(Icons.Default.PlaylistPlay, null) }, label = { Text("Плейлисты") }, colors = navColors(currentTheme))
+                                                NavigationBarItem(selected = currentScreen == Screen.Library, onClick = { currentScreen = Screen.Library }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Библиотека") }, colors = navColors(currentTheme))
+                                                NavigationBarItem(selected = currentScreen == Screen.Settings || currentScreen == Screen.Themes, onClick = { currentScreen = Screen.Settings }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Настройки") }, colors = navColors(currentTheme))
+                                            }
                                         }
                                     }
                                 }
                             }
                         ) { paddingValues ->
                             Box(modifier = Modifier.padding(paddingValues)) {
-                                when (currentScreen) {
-                                    Screen.Files -> FileManagerScreen(
-                                        onPlayAudio = { uri, _ -> externalAudioUri = uri },
-                                        onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri }
-                                    )
-                                    Screen.Playlists -> PlaylistsScreen(onPlayAudio = { uri, _ -> externalAudioUri = uri })
-                                    Screen.Library -> LibraryScreen(
-                                        onPlayAudio = { uri, _ -> externalAudioUri = uri }
-                                    )
-                                    Screen.Settings -> SettingsScreen(
-                                        onOpenThemes = { currentScreen = Screen.Themes },
-                                        autoShowLyrics = autoShowLyrics,
-                                        onAutoShowLyricsChange = { autoShowLyrics = it; prefs.edit().putBoolean("auto_lyrics", it).apply() },
-                                        visualizerStyle = visualizerStyle,
-                                        onVisualizerStyleChange = { visualizerStyle = it; prefs.edit().putString("viz_style", it).apply() },
-                                        visualizerColor = visualizerColor,
-                                        onVisualizerColorChange = { visualizerColor = it; prefs.edit().putString("viz_color", it).apply() }
-                                    )
-                                    Screen.Themes -> ThemePickerScreen(
-                                        current = currentTheme,
-                                        allThemes = repo.getAllThemes(),
-                                        onSelect = { theme -> currentTheme = theme; repo.saveThemeId(theme.id); currentScreen = Screen.Settings }
-                                    )
-                                    Screen.Player -> PlayerScreen(
-                                        theme = currentTheme,
-                                        player = mediaController!!,
-                                        metadata = currentMetadata,
-                                        lyrics = currentLyrics,
-                                        autoShowLyrics = autoShowLyrics,
-                                        visualizerStyle = visualizerStyle,
-                                        visualizerColor = visualizerColor,
-                                        onBack = { currentScreen = Screen.Files }
-                                    )
+                                // Плавный переход между экранами
+                                AnimatedContent(
+                                    targetState = currentScreen,
+                                    transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(300)) },
+                                    label = "screen_transition"
+                                ) { screen ->
+                                    when (screen) {
+                                        Screen.Files -> FileManagerScreen(
+                                            onPlayAudio = { uri, _ -> externalAudioUri = uri },
+                                            onPlayPlaylist = { uri, _ -> externalPlaylistUri = uri }
+                                        )
+                                        Screen.Playlists -> PlaylistsScreen(onPlayAudio = { uri, _ -> externalAudioUri = uri })
+                                        Screen.Library -> LibraryScreen(onPlayAudio = { uri, _ -> externalAudioUri = uri })
+                                        Screen.Settings -> SettingsScreen(
+                                            onOpenThemes = { currentScreen = Screen.Themes },
+                                            autoShowLyrics = autoShowLyrics,
+                                            onAutoShowLyricsChange = { autoShowLyrics = it; prefs.edit().putBoolean("auto_lyrics", it).apply() },
+                                            visualizerStyle = visualizerStyle,
+                                            onVisualizerStyleChange = { visualizerStyle = it; prefs.edit().putString("viz_style", it).apply() },
+                                            visualizerColor = visualizerColor,
+                                            onVisualizerColorChange = { visualizerColor = it; prefs.edit().putString("viz_color", it).apply() }
+                                        )
+                                        Screen.Themes -> ThemePickerScreen(
+                                            current = currentTheme,
+                                            allThemes = repo.getAllThemes(),
+                                            onSelect = { theme -> currentTheme = theme; repo.saveThemeId(theme.id); currentScreen = Screen.Settings }
+                                        )
+                                        Screen.Player -> PlayerScreen(
+                                            theme = currentTheme,
+                                            player = mediaController!!,
+                                            metadata = currentMetadata,
+                                            lyrics = currentLyrics,
+                                            autoShowLyrics = autoShowLyrics,
+                                            visualizerStyle = visualizerStyle,
+                                            visualizerColor = visualizerColor,
+                                            onBack = { currentScreen = Screen.Files }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -342,13 +382,13 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun LibraryScreen(onPlayAudio: (Uri, String) -> Unit) {
     val context = LocalContext.current
-    var selectedTab by remember { mutableStateOf(0) } // 0 - Избранное, 1 - История
+    var selectedTab by remember { mutableStateOf(0) }
     
     val favorites = remember { FavoritesRepository.getFavorites(context) }
     val history = remember { FavoritesRepository.getFavoritesHistory(context) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        TabRow(selectedTabIndex = selectedTab) {
+        TabRow(selectedTabIndex = selectedTab, containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)) {
             Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Избранное") }, icon = { Icon(Icons.Default.Favorite, null) })
             Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("История") }, icon = { Icon(Icons.Default.History, null) })
         }
@@ -367,7 +407,7 @@ fun LibraryScreen(onPlayAudio: (Uri, String) -> Unit) {
                         Spacer(Modifier.width(12.dp))
                         Text(uri.lastPathSegment?.substringAfterLast("/") ?: "Неизвестный трек", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    HorizontalDivider()
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                 }
             }
         }
@@ -375,17 +415,27 @@ fun LibraryScreen(onPlayAudio: (Uri, String) -> Unit) {
 }
 
 @Composable
-fun MiniPlayer(theme: DxTheme, title: String, isPlaying: Boolean, onPlayPause: () -> Unit, onClick: () -> Unit) {
-    Surface(color = theme.surface, modifier = Modifier.fillMaxWidth().padding(8.dp).shadow(4.dp, RoundedCornerShape(12.dp)).clickable { onClick() }, shape = RoundedCornerShape(12.dp)) {
-        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.MusicNote, contentDescription = null, tint = theme.primary)
-            Spacer(Modifier.width(12.dp))
-            Text(text = title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, color = theme.onSurface)
-            IconButton(onClick = onPlayPause) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null, tint = theme.primary) }
+fun MiniPlayer(theme: DxTheme, title: String, progress: Float, isPlaying: Boolean, onPlayPause: () -> Unit, onClick: () -> Unit) {
+    Surface(color = theme.surface, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).shadow(4.dp, RoundedCornerShape(12.dp)).clickable { onClick() }, shape = RoundedCornerShape(12.dp)) {
+        Column {
+            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.MusicNote, contentDescription = null, tint = theme.primary)
+                Spacer(Modifier.width(12.dp))
+                Text(text = title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, color = theme.onSurface, style = MaterialTheme.typography.bodyMedium)
+                IconButton(onClick = onPlayPause) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null, tint = theme.primary) }
+            }
+            // Тонкая полоса прогресса
+            LinearProgressIndicator(
+                progress = progress,
+                color = theme.primary,
+                trackColor = theme.surfaceVariant.copy(alpha = 0.3f),
+                modifier = Modifier.fillMaxWidth().height(2.dp)
+            )
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     theme: DxTheme,
@@ -414,11 +464,21 @@ fun PlayerScreen(
     var visualizer by remember { mutableStateOf<Visualizer?>(null) }
     var isVisInit by remember { mutableStateOf(false) }
 
-    // --- ИЗБРАННОЕ И ОЧЕРЕДЬ ---
-    var isFavorite by remember { mutableStateOf(FavoritesRepository.isFavorite(context, metadata?.let { Uri.parse(it.title) } ?: Uri.EMPTY)) }
+    var isFavorite by remember { mutableStateOf(FavoritesRepository.isFavorite(context, player.currentMediaItem?.localConfiguration?.uri)) }
     var showQueueSheet by remember { mutableStateOf(false) }
-    
-    // Слушаем изменения текущего трека для обновления сердечка
+
+    // Анимация пульсации кнопки Play
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val playScale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = if (isPlaying) 1.1f else 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "scale"
+    )
+
     LaunchedEffect(player.currentMediaItem) {
         isFavorite = FavoritesRepository.isFavorite(context, player.currentMediaItem?.localConfiguration?.uri)
     }
@@ -519,34 +579,27 @@ fun PlayerScreen(
         )
     }
 
-    val gradient = Brush.verticalGradient(colors = listOf(theme.primary.copy(alpha = 0.15f), theme.background))
+    val gradient = Brush.verticalGradient(
+        colors = listOf(Color.Black.copy(alpha = 0.3f), theme.background)
+    )
     val vizColor = when (visualizerColor) {
         "Радуга" -> Color.hsv((sliderPosition / 1000) % 360f, 1f, 1f)
         "Белый" -> Color.White
         else -> theme.primary
     }
 
-    // Очередь (Bottom Sheet)
     if (showQueueSheet) {
         ModalBottomSheet(onDismissRequest = { showQueueSheet = false }, containerColor = theme.surface) {
-            Text("Очередь воспроизведения", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp), color = theme.onSurface)
+            Text("Очередь", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp), color = theme.onSurface)
             LazyColumn(modifier = Modifier.fillMaxHeight(0.8f)) {
                 items(player.mediaItemCount) { index ->
                     val item = player.getMediaItemAt(index)
                     val isCurrent = index == player.currentMediaItemIndex
                     Row(
-                        Modifier.fillMaxWidth().clickable { 
-                            player.seekTo(index, 0)
-                            showQueueSheet = false 
-                        }.padding(16.dp),
+                        Modifier.fillMaxWidth().clickable { player.seekTo(index, 0); showQueueSheet = false }.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = item.mediaId.substringAfterLast("/"), 
-                            color = if (isCurrent) theme.primary else theme.onSurface,
-                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis
-                        )
+                        Text(item.mediaId.substringAfterLast("/"), color = if (isCurrent) theme.primary else theme.onSurface, fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                 }
@@ -554,148 +607,163 @@ fun PlayerScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(gradient).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = theme.onSurface) }
-            Text(if (showLyrics) "Текст песни" else "Сейчас играет", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), color = theme.onSurface)
-            
-            // Кнопка Очереди
-            IconButton(onClick = { showQueueSheet = true }) {
-                Icon(Icons.Default.QueueMusic, contentDescription = "Очередь", tint = theme.onSurface)
-            }
-            
-            // Кнопка Сердечка
-            IconButton(onClick = { 
-                player.currentMediaItem?.localConfiguration?.uri?.let { uri ->
-                    isFavorite = FavoritesRepository.toggleFavorite(context, uri)
-                }
-            }) {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                    contentDescription = "В избранное",
-                    tint = if (isFavorite) theme.primary else theme.onSurface
-                )
-            }
-
-            if (lyrics.isNotEmpty()) {
-                IconButton(onClick = { showLyrics = !showLyrics }) {
-                    Icon(if (showLyrics) Icons.Default.MusicNote else Icons.Default.Subject, contentDescription = "Текст", tint = theme.onSurface)
-                }
-            }
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 1. Фон из размытой обложки
+        if (metadata?.bitmap != null) {
+            Image(
+                bitmap = metadata.bitmap.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().blur(50.dp).alpha(0.4f)
+            )
         }
+        Box(modifier = Modifier.fillMaxSize().background(gradient))
 
-        Box(modifier = Modifier.weight(1f).fillMaxWidth().then(gestureModifier), contentAlignment = Alignment.Center) {
-            if (showLyrics && lyrics.isNotEmpty()) {
-                LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 100.dp)) {
-                    items(lyrics) { line ->
-                        val isCurrent = line.timeMs <= sliderPosition.toLong() && line.timeMs + 5000 > sliderPosition.toLong()
-                        Text(line.text, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), textAlign = TextAlign.Center, color = if (isCurrent) theme.primary else theme.onSurface, fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal, fontSize = if (isCurrent) 20.sp else 16.sp)
+        Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = theme.onSurface) }
+                Text(if (showLyrics) "Текст песни" else "Сейчас играет", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), color = theme.onSurface)
+                
+                IconButton(onClick = { showQueueSheet = true }) { Icon(Icons.Default.QueueMusic, contentDescription = "Очередь", tint = theme.onSurface) }
+                IconButton(onClick = { 
+                    player.currentMediaItem?.localConfiguration?.uri?.let { uri ->
+                        isFavorite = FavoritesRepository.toggleFavorite(context, uri)
                     }
+                }) {
+                    Icon(if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = "В избранное", tint = if (isFavorite) theme.primary else theme.onSurface)
                 }
-            } else {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Surface(modifier = Modifier.size(260.dp).shadow(12.dp, RoundedCornerShape(16.dp)), shape = RoundedCornerShape(16.dp), color = theme.surface) {
-                        if (metadata?.bitmap != null) {
-                            Image(bitmap = metadata.bitmap.asImageBitmap(), contentDescription = "Обложка", modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)), contentScale = ContentScale.Crop)
-                        } else {
-                            Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(120.dp), tint = theme.primary) }
+                if (lyrics.isNotEmpty()) {
+                    IconButton(onClick = { showLyrics = !showLyrics }) { Icon(if (showLyrics) Icons.Default.MusicNote else Icons.Default.Subject, contentDescription = "Текст", tint = theme.onSurface) }
+                }
+            }
+
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().then(gestureModifier), contentAlignment = Alignment.Center) {
+                if (showLyrics && lyrics.isNotEmpty()) {
+                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 100.dp)) {
+                        items(lyrics) { line ->
+                            val isCurrent = line.timeMs <= sliderPosition.toLong() && line.timeMs + 5000 > sliderPosition.toLong()
+                            Text(line.text, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), textAlign = TextAlign.Center, color = if (isCurrent) theme.primary else theme.onSurface, fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal, fontSize = if (isCurrent) 20.sp else 16.sp)
                         }
                     }
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Text(text = metadata?.title ?: "Неизвестно", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis, color = theme.onSurface)
-                    Text(text = "${metadata?.artist} • ${metadata?.album}", style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis, color = theme.onSurface.copy(alpha = 0.7f))
+                } else {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Surface(modifier = Modifier.size(260.dp).shadow(12.dp, RoundedCornerShape(16.dp)), shape = RoundedCornerShape(16.dp), color = theme.surface.copy(alpha = 0.8f)) {
+                            if (metadata?.bitmap != null) {
+                                Image(bitmap = metadata.bitmap.asImageBitmap(), contentDescription = "Обложка", modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)), contentScale = ContentScale.Crop)
+                            } else {
+                                Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(120.dp), tint = theme.primary) }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Text(text = metadata?.title ?: "Неизвестно", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis, color = theme.onSurface)
+                        Text(text = "${metadata?.artist} • ${metadata?.album}", style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis, color = theme.onSurface.copy(alpha = 0.7f))
+                    }
                 }
             }
-        }
 
-        if (visualizerStyle != "Отключен") {
-            Box(modifier = Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
-                if (!isVisInit) {
-                    Text("Ожидание аудио...", style = MaterialTheme.typography.bodySmall, color = theme.onSurface.copy(alpha = 0.5f))
-                }
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    if (smoothData.isNotEmpty() && isVisInit) {
-                        val width = size.width; val height = size.height; val centerY = height / 2
-                        when (visualizerStyle) {
-                            "Волна" -> {
-                                val path = Path(); val step = width / (smoothData.size - 1).coerceAtLeast(1)
-                                path.moveTo(0f, centerY)
-                                smoothData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); if (index == 0) path.moveTo(x, y) else path.lineTo(x, y) }
-                                path.lineTo(width, centerY); path.lineTo(0f, centerY); path.close()
-                                drawPath(path = path, color = vizColor.copy(alpha = 0.8f)); drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
-                            }
-                            "Спектр (Cava)" -> {
-                                val barWidth = width / (smoothData.size * 2)
-                                smoothData.forEachIndexed { index, value -> val barHeight = value * height; val x = index * barWidth * 2; drawRoundRect(color = vizColor, topLeft = Offset(x, centerY - barHeight / 2), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(4f, 4f)) }
-                            }
-                            "Круг" -> {
-                                val radius = height / 2.5f; val center = Offset(width / 2, centerY)
-                                smoothData.forEachIndexed { index, value ->
-                                    val angle = (index.toFloat() / smoothData.size) * 360f; val barLength = value * height; val rad = Math.toRadians(angle.toDouble())
-                                    val start = Offset(center.x + (radius * cos(rad)).toFloat(), center.y + (radius * sin(rad)).toFloat())
-                                    val end = Offset(center.x + ((radius + barLength) * cos(rad)).toFloat(), center.y + ((radius + barLength) * sin(rad)).toFloat())
-                                    drawLine(color = vizColor, start = start, end = end, strokeWidth = 3.dp.toPx())
+            if (visualizerStyle != "Отключен") {
+                Box(modifier = Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+                    if (!isVisInit) {
+                        Text("Ожидание аудио...", style = MaterialTheme.typography.bodySmall, color = theme.onSurface.copy(alpha = 0.5f))
+                    }
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        if (smoothData.isNotEmpty() && isVisInit) {
+                            val width = size.width; val height = size.height; val centerY = height / 2
+                            when (visualizerStyle) {
+                                "Волна" -> {
+                                    val path = Path(); val step = width / (smoothData.size - 1).coerceAtLeast(1)
+                                    path.moveTo(0f, centerY)
+                                    smoothData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); if (index == 0) path.moveTo(x, y) else path.lineTo(x, y) }
+                                    path.lineTo(width, centerY); path.lineTo(0f, centerY); path.close()
+                                    drawPath(path = path, color = vizColor.copy(alpha = 0.8f)); drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
                                 }
-                            }
-                            "Зеркальные бары" -> {
-                                val barWidth = width / (smoothData.size * 2)
-                                smoothData.forEachIndexed { index, value ->
-                                    val barHeight = value * height / 2; val x = index * barWidth * 2
-                                    drawRoundRect(color = vizColor, topLeft = Offset(x, centerY - barHeight), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(2f, 2f))
-                                    drawRoundRect(color = vizColor, topLeft = Offset(x, centerY), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(2f, 2f))
+                                "Спектр (Cava)" -> {
+                                    val barWidth = width / (smoothData.size * 2)
+                                    smoothData.forEachIndexed { index, value -> val barHeight = value * height; val x = index * barWidth * 2; drawRoundRect(color = vizColor, topLeft = Offset(x, centerY - barHeight / 2), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(4f, 4f)) }
                                 }
-                            }
-                            "Заполненная волна" -> {
-                                val path = Path(); val step = width / (smoothData.size - 1).coerceAtLeast(1)
-                                path.moveTo(0f, height)
-                                smoothData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); path.lineTo(x, y) }
-                                path.lineTo(width, height); path.close()
-                                drawPath(path = path, color = vizColor.copy(alpha = 0.6f)); drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
-                            }
-                            "Точки" -> {
-                                val step = width / (smoothData.size - 1).coerceAtLeast(1)
-                                smoothData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); drawCircle(color = vizColor, radius = (value * 4.dp.toPx()) + 2f, center = Offset(x, y)) }
+                                "Круг" -> {
+                                    val radius = height / 2.5f; val center = Offset(width / 2, centerY)
+                                    smoothData.forEachIndexed { index, value ->
+                                        val angle = (index.toFloat() / smoothData.size) * 360f; val barLength = value * height; val rad = Math.toRadians(angle.toDouble())
+                                        val start = Offset(center.x + (radius * cos(rad)).toFloat(), center.y + (radius * sin(rad)).toFloat())
+                                        val end = Offset(center.x + ((radius + barLength) * cos(rad)).toFloat(), center.y + ((radius + barLength) * sin(rad)).toFloat())
+                                        drawLine(color = vizColor, start = start, end = end, strokeWidth = 3.dp.toPx())
+                                    }
+                                }
+                                "Зеркальные бары" -> {
+                                    val barWidth = width / (smoothData.size * 2)
+                                    smoothData.forEachIndexed { index, value ->
+                                        val barHeight = value * height / 2; val x = index * barWidth * 2
+                                        drawRoundRect(color = vizColor, topLeft = Offset(x, centerY - barHeight), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(2f, 2f))
+                                        drawRoundRect(color = vizColor, topLeft = Offset(x, centerY), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(2f, 2f))
+                                    }
+                                }
+                                "Заполненная волна" -> {
+                                    val path = Path(); val step = width / (smoothData.size - 1).coerceAtLeast(1)
+                                    path.moveTo(0f, height)
+                                    smoothData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); path.lineTo(x, y) }
+                                    path.lineTo(width, height); path.close()
+                                    drawPath(path = path, color = vizColor.copy(alpha = 0.6f)); drawPath(path = path, color = vizColor, style = Stroke(width = 2.dp.toPx()))
+                                }
+                                "Точки" -> {
+                                    val step = width / (smoothData.size - 1).coerceAtLeast(1)
+                                    smoothData.forEachIndexed { index, value -> val x = index * step; val y = centerY - (value * height / 2); drawCircle(color = vizColor, radius = (value * 4.dp.toPx()) + 2f, center = Offset(x, y)) }
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        Slider(
-            value = sliderPosition.coerceIn(0f, if (duration > 0) duration.toFloat() else 1f),
-            onValueChange = { isDragging = true; sliderPosition = it },
-            onValueChangeFinished = { isDragging = false; player.seekTo(sliderPosition.toLong()) },
-            valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f),
-            colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary, inactiveTrackColor = theme.surface)
-        )
-        
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatTime(sliderPosition.toLong()), style = MaterialTheme.typography.bodySmall, color = theme.onSurface)
-            Text(formatTime(duration), style = MaterialTheme.typography.bodySmall, color = theme.onSurface)
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { player.seekToPrevious() }, modifier = Modifier.size(64.dp)) {
-                Icon(Icons.Default.SkipPrevious, contentDescription = "Предыдущий", modifier = Modifier.size(40.dp), tint = theme.onSurface)
+            Slider(
+                value = sliderPosition.coerceIn(0f, if (duration > 0) duration.toFloat() else 1f),
+                onValueChange = { isDragging = true; sliderPosition = it },
+                onValueChangeFinished = { isDragging = false; player.seekTo(sliderPosition.toLong()) },
+                valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f),
+                colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary, inactiveTrackColor = theme.surface)
+            )
+            
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(formatTime(sliderPosition.toLong()), style = MaterialTheme.typography.bodySmall, color = theme.onSurface)
+                Text(formatTime(duration), style = MaterialTheme.typography.bodySmall, color = theme.onSurface)
             }
-            Spacer(modifier = Modifier.width(24.dp))
-            Surface(
-                modifier = Modifier.size(84.dp).clickable { if (isPlaying) player.pause() else { if (player.playbackState == Player.STATE_ENDED) player.seekTo(0); player.play() } }.shadow(8.dp, CircleShape),
-                shape = CircleShape, color = theme.primary
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Плавающая панель управления
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play/Pause", modifier = Modifier.size(48.dp), tint = theme.onPrimary)
+                Surface(
+                    shape = RoundedCornerShape(50.dp),
+                    color = theme.surface.copy(alpha = 0.9f),
+                    shadowElevation = 8.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { player.seekToPrevious() }, modifier = Modifier.size(56.dp)) {
+                            Icon(Icons.Default.SkipPrevious, contentDescription = "Предыдущий", modifier = Modifier.size(32.dp), tint = theme.onSurface)
+                        }
+                        Surface(
+                            modifier = Modifier.size(72.dp).scale(playScale),
+                            shape = CircleShape,
+                            color = theme.primary
+                        ) {
+                            IconButton(onClick = { if (isPlaying) player.pause() else { if (player.playbackState == Player.STATE_ENDED) player.seekTo(0); player.play() } }) {
+                                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play/Pause", modifier = Modifier.size(40.dp), tint = theme.onPrimary)
+                            }
+                        }
+                        IconButton(onClick = { player.seekToNext() }, modifier = Modifier.size(56.dp)) {
+                            Icon(Icons.Default.SkipNext, contentDescription = "Следующий", modifier = Modifier.size(32.dp), tint = theme.onSurface)
+                        }
+                    }
                 }
             }
-            Spacer(modifier = Modifier.width(24.dp))
-            IconButton(onClick = { player.seekToNext() }, modifier = Modifier.size(64.dp)) {
-                Icon(Icons.Default.SkipNext, contentDescription = "Следующий", modifier = Modifier.size(40.dp), tint = theme.onSurface)
-            }
         }
-        Spacer(modifier = Modifier.height(32.dp))
     }
 }
 
